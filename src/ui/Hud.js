@@ -4,6 +4,7 @@ const INFO_UPDATE_INTERVAL_MS = 300; // street/coords don't need per-frame preci
 const FPS_WINDOW = 30; // frames, smooths the readout
 
 const COMPASS_LABELS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 export function compassHeadingDeg(cameraYaw) {
   // Matches the app-wide convention (-Z = geographic north, +X = east):
@@ -31,7 +32,8 @@ export class Hud {
     this.controlsEl.style.cssText = `${baseStyle} left: 12px; bottom: 12px; padding: 8px 10px; font: 12px/1.6 system-ui, sans-serif;`;
     this.controlsEl.innerHTML =
       '<div><b>WASD</b> move &middot; <b>Shift</b> run &middot; <b>Space</b> jump</div>' +
-      '<div>Click to lock mouse &middot; move mouse to look around</div>';
+      '<div>Click to lock mouse &middot; move mouse to look around</div>' +
+      '<div><b>[</b> / <b>]</b> time speed &middot; <b>P</b> pause time</div>';
 
     this.infoEl = document.createElement('div');
     this.infoEl.style.cssText = `${baseStyle} right: 12px; top: 12px; padding: 8px 10px; font: 12px/1.6 system-ui, sans-serif; text-align: right; min-width: 170px;`;
@@ -42,13 +44,13 @@ export class Hud {
     document.body.append(this.controlsEl, this.infoEl, this.statsEl);
   }
 
-  /** @param {{position: THREE.Vector3, cameraYaw: number, tileManager: object}} state */
+  /** @param {{position, cameraYaw, tileManager, clock?, citizenCount?}} state */
   update(delta, state) {
-    this._updateStats(delta, state.tileManager);
+    this._updateStats(delta, state);
     this._updateInfoThrottled(state);
   }
 
-  _updateStats(delta, tileManager) {
+  _updateStats(delta, { tileManager, citizenCount }) {
     this._frameDeltas.push(delta);
     if (this._frameDeltas.length > FPS_WINDOW) this._frameDeltas.shift();
     const avgDelta = this._frameDeltas.reduce((a, b) => a + b, 0) / this._frameDeltas.length;
@@ -60,10 +62,11 @@ export class Hud {
       `${info.render.calls} draw calls\n` +
       `${(info.render.triangles / 1000).toFixed(1)}k tris\n` +
       `${info.memory.geometries} geom / ${info.memory.textures} tex\n` +
-      `${tileManager.loadedTileCount} tiles loaded`;
+      `${tileManager.loadedTileCount} tiles loaded` +
+      (citizenCount != null ? `\n${citizenCount} citizens near` : '');
   }
 
-  _updateInfoThrottled({ position, cameraYaw, tileManager }) {
+  _updateInfoThrottled({ position, cameraYaw, tileManager, clock }) {
     const now = performance.now();
     if (now - this._lastInfoUpdate < INFO_UPDATE_INTERVAL_MS) return;
     this._lastInfoUpdate = now;
@@ -72,8 +75,10 @@ export class Hud {
     const heading = compassHeadingDeg(cameraYaw);
     const compass = COMPASS_LABELS[Math.round(heading / 45) % 8];
     const street = tileManager.findNearestRoadName(position.x, position.z);
+    const clockLine = clock ? `<div style="font-size: 15px; font-weight: 600;">${DAY_NAMES[clock.day]} ${clock.formatClock()}</div>` : '';
 
     this.infoEl.innerHTML =
+      clockLine +
       `<div style="font-size: 13px; margin-bottom: 2px;">${street ?? 'Lund'}</div>` +
       `<div>${compass} ${heading.toFixed(0)}&deg;</div>` +
       `<div>${latlon.lat.toFixed(5)}, ${latlon.lon.toFixed(5)}</div>`;

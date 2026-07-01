@@ -33,6 +33,21 @@ export const FOG_COLOR = 0xbfd9ff;
 export const FOG_NEAR = (LOAD_RADIUS - 1) * TILE_SIZE_M;
 export const FOG_FAR = LOAD_RADIUS * TILE_SIZE_M - 100; // tiles pop in inside the fog
 
+// --- Time of day ---
+// A full in-game day passes in this many real minutes (48 -> 30x real-time).
+// Adjustable at runtime; this is only the starting speed.
+export const DAY_LENGTH_MINUTES = 48;
+export const START_HOUR = 8; // spawn mid-morning so there's visible street life
+export const START_DAY = 1; // 0=Sun..6=Sat; start on a weekday
+
+// --- Population / citizens ---
+export const CITIZEN_POP_BASE_URL = './population';
+// Citizens whose current anchor is within this radius (m) of the player are
+// rendered as animated bodies; comfortably inside FOG_FAR so pop-in hides.
+export const CITIZEN_ACTIVATION_RADIUS_M = 480;
+export const CITIZEN_RELEASE_RADIUS_M = 620; // hysteresis so bodies don't thrash at the edge
+export const MAX_RENDERED_CITIZENS = 150; // the visible-crowd cap (perf ceiling)
+
 // --- Building height heuristics (meters) ---
 // Measured from a live OSM sample of central Lund: ~79% of buildings have
 // neither `height` nor `building:levels` tagged, so type-based fallback

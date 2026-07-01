@@ -10,7 +10,12 @@ import { Controller } from './player/Controller.js';
 import { FollowCamera } from './player/FollowCamera.js';
 import { LoadingScreen } from './ui/LoadingScreen.js';
 import { Hud } from './ui/Hud.js';
-import { projection, TILE_SIZE_M, LOAD_RADIUS, DISPOSE_RADIUS, FOG_COLOR, FOG_NEAR, FOG_FAR, SPAWN_LATLON } from './config.js';
+import { GameClock } from './sim/GameClock.js';
+import { SkyController } from './sim/SkyController.js';
+import {
+  projection, TILE_SIZE_M, LOAD_RADIUS, DISPOSE_RADIUS, FOG_COLOR, FOG_NEAR, FOG_FAR, SPAWN_LATLON,
+  DAY_LENGTH_MINUTES, START_HOUR, START_DAY,
+} from './config.js';
 
 const loadingScreen = new LoadingScreen();
 
@@ -30,6 +35,11 @@ engine.scene.background = new THREE.Color(FOG_COLOR);
 engine.scene.fog = new THREE.Fog(FOG_COLOR, FOG_NEAR, FOG_FAR);
 engine.camera.far = FOG_FAR + 200;
 engine.camera.updateProjectionMatrix();
+
+// Time of day + dynamic day/night sky (drives the sun, light colour, and fog
+// tint each frame). Reuses the hemi/sun lights created above.
+const gameClock = new GameClock({ dayLengthMinutes: DAY_LENGTH_MINUTES, startHour: START_HOUR, startDay: START_DAY });
+const skyController = new SkyController(engine.scene, { sun, hemi, fog: engine.scene.fog });
 
 const spawn = projection.project(SPAWN_LATLON.lat, SPAWN_LATLON.lon);
 engine.camera.position.set(spawn.x, 2.5, spawn.z + 8);
@@ -73,13 +83,30 @@ engine.onUpdate((delta) => {
   const px = controller ? controller.position.x : spawn.x;
   const pz = controller ? controller.position.z : spawn.z;
   tileManager.update(px, pz);
+  gameClock.update(delta);
+  skyController.update(gameClock);
 
   if (controller) {
     controller.update(delta, followCamera.yaw);
     followCamera.update(controller.position, collider.nearbyColliders(px, pz), delta);
-    hud.update(delta, { position: controller.position, cameraYaw: followCamera.yaw, tileManager });
+    hud.update(delta, { position: controller.position, cameraYaw: followCamera.yaw, tileManager, clock: gameClock });
   } else {
     character.update(delta);
+  }
+});
+
+// Time-of-day controls: [ / ] adjust speed, P pauses.
+const TIME_SPEEDS = [0.25, 0.5, 1, 2, 4, 8];
+let timeSpeedIndex = 2;
+window.addEventListener('keydown', (e) => {
+  if (e.code === 'BracketRight') {
+    timeSpeedIndex = Math.min(TIME_SPEEDS.length - 1, timeSpeedIndex + 1);
+    gameClock.setSpeed(TIME_SPEEDS[timeSpeedIndex]);
+  } else if (e.code === 'BracketLeft') {
+    timeSpeedIndex = Math.max(0, timeSpeedIndex - 1);
+    gameClock.setSpeed(TIME_SPEEDS[timeSpeedIndex]);
+  } else if (e.code === 'KeyP') {
+    gameClock.togglePause();
   }
 });
 
@@ -87,6 +114,8 @@ window.__debugCharacter = character;
 window.__debugTileManager = tileManager; // for headless verification (tile counts)
 window.__debugCollider = collider;
 window.__debugFollowCamera = followCamera;
+window.__debugGameClock = gameClock; // for headless verification (time of day)
+window.__debugSky = skyController;
 window.__engine = engine; // for headless verification (camera control, screenshots)
 
 let firstTileLoaded = false;
