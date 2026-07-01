@@ -1,9 +1,10 @@
 # Lund Walkable Simulation
 
 A walkable, 1:1 digital reconstruction of Lund, Sweden, built from real
-OpenStreetMap data. This is the foundation for a game: the first milestone is
-a proof of concept — a third-person character walking a streaming,
-full-fidelity recreation of the city — with gameplay layered on top later.
+OpenStreetMap data. This is the foundation for a game: a third-person character
+walks a streaming, full-fidelity recreation of the city, now populated by its
+citizens — unique people with homes, jobs, and 24-hour schedules, so the
+streets fill and empty with the rhythm of a real day under a moving sun.
 
 ## Requirements
 
@@ -21,7 +22,8 @@ Open the printed local URL. You spawn at Lund Cathedral on the committed
 central-core tileset, which works immediately with no data fetch required.
 
 **Controls**: `WASD` move &middot; `Shift` run &middot; `Space` jump &middot;
-click the canvas to lock the mouse and look around.
+click the canvas to lock the mouse and look around &middot; `[` / `]` change the
+time-of-day speed &middot; `P` pause time.
 
 ## Scripts
 
@@ -81,5 +83,10 @@ with `npm run data:all`).
   and pre-processed into compact per-tile JSON files (see `scripts/`).
 - **Collision**: `three-mesh-bvh` capsule-vs-mesh collision against the
   streamed building geometry.
+- **Citizens** (`src/sim/`): a three-tier agent LOD — the whole ~120k
+  population is dormant, citizens homed in loaded tiles are tracked from their
+  pure 24-hour schedule, and only the nearest ~150 outdoors get pooled,
+  animated bodies that walk the real street network. A game clock drives both
+  the schedules and a dynamic day/night sky.
 
 See `src/` for the application and `scripts/` for the OSM data pipeline.

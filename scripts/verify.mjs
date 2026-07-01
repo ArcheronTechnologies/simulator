@@ -100,6 +100,20 @@ async function main() {
       return { triangles: info.render.triangles, calls: info.render.calls };
     });
 
+    // Citizens: the app starts at the morning commute, so once population
+    // shards have streamed in there should be a visible crowd near spawn.
+    await page.waitForFunction(
+      () => window.__debugPopulation && window.__debugPopulation._activeTiles.size >= 3,
+      { timeout: 15000 }
+    ).catch(() => {});
+    const citizens = await page.evaluate(() => {
+      const p = window.__debugPopulation;
+      if (!p) return { rendered: 0, activity: null };
+      const pl = window.__debugController.position;
+      p._reconcile(pl.x, pl.z); // deterministic populate at the current time
+      return { rendered: p.renderedCount, activity: p._activityCounts };
+    });
+
     const jsErrors = await page.evaluate(() => window.__ERRORS__ || []);
     const allErrors = [...pageErrors, ...jsErrors];
 
@@ -120,8 +134,12 @@ async function main() {
     console.log('[verify] non-black center pixel:', isNonBlack);
     console.log(`[verify] player moved ${movedDist.toFixed(2)}m holding KeyW for 1.5s`);
     console.log('[verify] render info:', renderInfo);
+    console.log(`[verify] citizens rendered near spawn (08:00): ${citizens.rendered}`, citizens.activity || '');
 
     const failures = [];
+    if (citizens.rendered <= 0) {
+      failures.push('No citizens rendered near spawn at the morning commute — population pipeline likely broken.');
+    }
     if (allErrors.length > 0) {
       failures.push(`Page reported ${allErrors.length} error(s): ${allErrors.join(' | ')}`);
     }
