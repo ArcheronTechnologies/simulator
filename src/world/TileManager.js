@@ -20,6 +20,33 @@ const MAX_INTEGRATIONS_PER_FRAME = 2;
 const WORKER_COUNT = 3;
 
 /**
+ * Nearest named-road label to (x,z) across a set of road lists (each an
+ * array of {n, p: flat [x,z,...]}), within maxDist, or null if none close
+ * enough. Pure so it's testable without a full TileManager (which creates
+ * real Web Workers in its constructor and can't run in Node tests).
+ */
+export function nearestRoadName(roadLists, x, z, maxDist) {
+  let bestName = null;
+  let bestDistSq = maxDist * maxDist;
+
+  for (const roads of roadLists) {
+    for (const road of roads) {
+      for (let i = 0; i < road.p.length; i += 2) {
+        const ddx = road.p[i] - x;
+        const ddz = road.p[i + 1] - z;
+        const distSq = ddx * ddx + ddz * ddz;
+        if (distSq < bestDistSq) {
+          bestDistSq = distSq;
+          bestName = road.n;
+        }
+      }
+    }
+  }
+
+  return bestName;
+}
+
+/**
  * Streams tile geometry in a radius around the player: fetches tile JSON,
  * builds geometry in a worker pool, integrates finished tiles onto the main
  * thread at a throttled rate (the actual hitch-avoidance mechanism), and
@@ -42,6 +69,12 @@ export class TileManager {
     this.lastPlayerTileKey = null;
     this._centerTx = null;
     this._centerTz = null;
+
+    // Named roads (for HUD "nearest street" lookup) are cheap to keep
+    // around directly from the fetched tile JSON -- no need to round-trip
+    // them through the geometry-building worker.
+    this.namedRoads = new Map(); // key -> [{n, p}] for loaded tiles
+    this._fetchedNamedRoads = new Map(); // key -> [{n, p}] while a tile is in flight
 
     this.workers = [];
     for (let i = 0; i < WORKER_COUNT; i++) {
@@ -125,6 +158,7 @@ export class TileManager {
       const res = await fetch(`${this.tilesBaseUrl}/${key}.json`);
       if (!res.ok) throw new Error(`HTTP ${res.status} fetching tile ${key}`);
       const tile = await res.json();
+      this._fetchedNamedRoads.set(key, tile.roads.filter((r) => r.n));
       this._pickWorker().postMessage({ type: 'build', key, tile });
     } catch (err) {
       console.error(`[TileManager] failed to load tile ${key}:`, err);
@@ -139,6 +173,8 @@ export class TileManager {
 
     this.readyQueue.push(() => {
       this.pending.delete(key);
+      const namedRoads = this._fetchedNamedRoads.get(key) ?? [];
+      this._fetchedNamedRoads.delete(key);
       if (this.loaded.has(key)) return;
 
       // The player may have moved on while this tile was in flight —
@@ -150,6 +186,7 @@ export class TileManager {
         return;
       }
 
+      this.namedRoads.set(key, namedRoads);
       this._integrateTile(key, layers);
     });
   }
@@ -203,6 +240,20 @@ export class TileManager {
       mesh.geometry.dispose(); // never dispose the shared materials
     }
     this.loaded.delete(key);
+    this.namedRoads.delete(key);
+  }
+
+  /** Nearest named-road label within maxDist of a world position, or null. */
+  findNearestRoadName(x, z, maxDist = 60) {
+    const { tx, tz } = tileIndex(x, z, this.tileSize);
+    const nearbyRoadLists = [];
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dz = -1; dz <= 1; dz++) {
+        const roads = this.namedRoads.get(tileKey(tx + dx, tz + dz));
+        if (roads) nearbyRoadLists.push(roads);
+      }
+    }
+    return nearestRoadName(nearbyRoadLists, x, z, maxDist);
   }
 
   /** Disposes every loaded tile and terminates the worker pool. */

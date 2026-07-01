@@ -8,7 +8,11 @@ import { Character } from './player/Character.js';
 import { Collider } from './player/Collider.js';
 import { Controller } from './player/Controller.js';
 import { FollowCamera } from './player/FollowCamera.js';
+import { LoadingScreen } from './ui/LoadingScreen.js';
+import { Hud } from './ui/Hud.js';
 import { projection, TILE_SIZE_M, LOAD_RADIUS, DISPOSE_RADIUS, FOG_COLOR, FOG_NEAR, FOG_FAR, SPAWN_LATLON } from './config.js';
+
+const loadingScreen = new LoadingScreen();
 
 const container = document.getElementById('app');
 const engine = new Engine(container);
@@ -62,6 +66,7 @@ const tileManager = new TileManager(engine.scene, {
 
 const character = new Character();
 const followCamera = new FollowCamera(engine.camera, engine.renderer.domElement);
+const hud = new Hud(engine.renderer);
 let controller = null;
 
 engine.onUpdate((delta) => {
@@ -72,6 +77,7 @@ engine.onUpdate((delta) => {
   if (controller) {
     controller.update(delta, followCamera.yaw);
     followCamera.update(controller.position, collider.nearbyColliders(px, pz), delta);
+    hud.update(delta, { position: controller.position, cameraYaw: followCamera.yaw, tileManager });
   } else {
     character.update(delta);
   }
@@ -105,6 +111,9 @@ Promise.all([tileManager.init(), character.load()])
     return firstTilePromise;
   })
   .catch((err) => console.error('[main] startup failed', err))
-  .finally(() => markReady());
+  .finally(() => {
+    loadingScreen.hide();
+    markReady();
+  });
 
 engine.start();

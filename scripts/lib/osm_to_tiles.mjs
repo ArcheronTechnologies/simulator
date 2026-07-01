@@ -137,7 +137,7 @@ export function convertToFeatures(elements, { project, levelHeightM, typeHeights
     }
 
     if (el.type === 'way' && tags.highway && el.geometry?.length >= 2) {
-      roads.push({ cls: roadClassOf(tags.highway), points: projectLine(el.geometry) });
+      roads.push({ cls: roadClassOf(tags.highway), name: tags.name || null, points: projectLine(el.geometry) });
       continue;
     }
 
@@ -297,6 +297,7 @@ export function tileFeatures(features, tileSizeM) {
   for (const r of features.roads) {
     addPolylineToTiles(tilesMap, tileSizeM, { ...r, layer: 'roads' }, (feat, pts) => ({
       c: feat.cls,
+      ...(feat.name ? { n: feat.name } : {}),
       p: pts.flatMap(([x, z]) => [round(x), round(z)]),
     }));
   }
