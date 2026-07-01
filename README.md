@@ -32,6 +32,8 @@ click the canvas to lock the mouse and look around.
 | `npm run preview` | Serve the production build locally |
 | `npm run data:core` | Fetch/refresh OSM data for the central Lund core |
 | `npm run data:all` | Fetch/refresh OSM data for the whole municipality |
+| `npm run data:population` | Generate the core citizen population from cached OSM data |
+| `npm run data:population:all` | Generate the full ~120k-citizen municipality population |
 | `npm run fetch:character` | Download the CC0 character model |
 | `npm run verify` | Headless build + render + movement smoke test (Playwright) |
 | `npm test` | Run the unit test suite (`node --test`) |
@@ -54,6 +56,22 @@ handful of core tile files modified in `git status` (since the full run
 overwrites them with municipality-wide data in the same directory). Run
 `git checkout -- public/tiles/` to drop those local changes and return to
 the committed core tileset.
+
+### Citizen population
+
+`public/population/` holds the simulated **citizens of Lund** — each with a
+home, a workplace/school, and a 24-hour schedule, generated deterministically
+from the same cached OSM data (`scripts/generate_population.mjs`, no re-fetch).
+Buildings are classified into homes vs workplaces from their OSM tags and
+containing landuse; citizens are assigned homes to capacity and matched to
+nearby jobs by archetype. Only citizens near the player are rendered — the rest
+are simulated abstractly from their schedule.
+
+The compact **core** population (central Lund, committed) works out of the box.
+`npm run data:population:all` regenerates the full ~120k set into the same
+directory (git-ignored); `git checkout -- public/population/` restores the
+committed core. Regeneration reads `data/cache/overpass/` (populate it first
+with `npm run data:all`).
 
 ## Architecture
 

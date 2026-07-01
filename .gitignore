@@ -14,6 +14,14 @@ public/tiles/*.json
 !public/tiles/manifest.json
 data/cache/
 
+# Generated population — reproducible via scripts/generate_population.mjs.
+# Same core/full split as tiles: the compact core population shards (committed
+# below) work out of the box; `npm run data:population:all` regenerates the full
+# ~120k-citizen set in this directory. This rule only blocks new/untracked
+# shards; it does not untrack the already-committed core shards.
+public/population/*.json
+!public/population/manifest.json
+
 # Generated character asset — reproducible via scripts/fetch_character.mjs
 public/assets/*.glb
 public/assets/*.gltf
