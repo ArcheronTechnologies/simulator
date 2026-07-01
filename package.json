@@ -12,7 +12,7 @@
     "data:all": "node scripts/fetch_overpass.mjs --all",
     "fetch:character": "node scripts/fetch_character.mjs",
     "verify": "node scripts/verify.mjs",
-    "test": "node --test scripts/lib/*.test.mjs"
+    "test": "node --test --test-reporter=spec scripts/lib/*.test.mjs src/**/*.test.mjs"
   },
   "dependencies": {
     "earcut": "^3.2.0",

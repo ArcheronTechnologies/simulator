@@ -18,8 +18,10 @@ export const ORIGIN = {
 
 export const projection = makeProjection(ORIGIN.lat, ORIGIN.lon);
 
-// Player spawns at Lund Cathedral, not the (rural) bbox midpoint.
-export const SPAWN_LATLON = { lat: 55.7047, lon: 13.1910 };
+// Player spawns on a real path just outside Lund Cathedral (not the rural
+// bbox midpoint, and verified clear of the Cathedral's own building
+// footprint -- the original estimate landed ~19m away, inside a wall).
+export const SPAWN_LATLON = { lat: 55.70481380770836, lon: 13.190765739866245 };
 
 // --- Tile streaming ---
 export const TILE_SIZE_M = 500;

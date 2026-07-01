@@ -1,10 +1,12 @@
 import * as THREE from 'three';
+import './core/bvhSetup.js';
 import './verify/smoke.js';
 import { Engine } from './core/Engine.js';
 import { markReady } from './verify/smoke.js';
-import { isKeyDown } from './core/Input.js';
 import { TileManager } from './world/TileManager.js';
 import { Character } from './player/Character.js';
+import { Collider } from './player/Collider.js';
+import { Controller } from './player/Controller.js';
 import { projection, TILE_SIZE_M, LOAD_RADIUS, DISPOSE_RADIUS, FOG_COLOR, FOG_NEAR, FOG_FAR, SPAWN_LATLON } from './config.js';
 
 const container = document.getElementById('app');
@@ -24,74 +26,73 @@ engine.scene.fog = new THREE.Fog(FOG_COLOR, FOG_NEAR, FOG_FAR);
 engine.camera.far = FOG_FAR + 200;
 engine.camera.updateProjectionMatrix();
 
-// Large flat ground plane so gaps between not-yet-loaded tiles never show
-// the void. Sits fractionally below y=0 so it never z-fights real tiles.
-const ground = new THREE.Mesh(
-  new THREE.PlaneGeometry(20000, 20000),
-  new THREE.MeshStandardMaterial({ color: 0x4a5240 })
-);
-ground.rotation.x = -Math.PI / 2;
-ground.position.y = -0.05;
-engine.scene.add(ground);
-
-// --- Temporary free-fly debug camera (WASD + arrow-key yaw, Space/Shift for
-// up/down) to prove tile streaming works before the real third-person
-// character + FollowCamera land in later steps. ---
 const spawn = projection.project(SPAWN_LATLON.lat, SPAWN_LATLON.lon);
-engine.camera.position.set(spawn.x, 2.5, spawn.z + 8);
-let yaw = 0; // -Z is "forward" at yaw=0, i.e. facing back toward spawn from +Z
 
-function updateFreeCam(delta) {
-  const turnSpeed = 1.6; // rad/s
-  if (isKeyDown('ArrowLeft')) yaw += turnSpeed * delta;
-  if (isKeyDown('ArrowRight')) yaw -= turnSpeed * delta;
-
-  const forward = new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
-  const right = new THREE.Vector3(-Math.cos(yaw), 0, Math.sin(yaw));
-  const speed = (isKeyDown('ShiftLeft') || isKeyDown('ShiftRight') ? 220 : 60) * delta;
-
-  if (isKeyDown('KeyW')) engine.camera.position.addScaledVector(forward, speed);
-  if (isKeyDown('KeyS')) engine.camera.position.addScaledVector(forward, -speed);
-  if (isKeyDown('KeyD')) engine.camera.position.addScaledVector(right, speed);
-  if (isKeyDown('KeyA')) engine.camera.position.addScaledVector(right, -speed);
-  if (isKeyDown('Space')) engine.camera.position.y += speed;
-  if (isKeyDown('ControlLeft')) engine.camera.position.y -= speed;
-
-  engine.camera.rotation.set(-0.25, yaw, 0, 'YXZ');
-}
+// Large flat ground plane, both visual (fills gaps between not-yet-loaded
+// tiles) and a collider (stops the player falling through gaps/before the
+// first tile streams in). Sits fractionally below y=0 so it never
+// z-fights real tile geometry.
+const collider = new Collider(TILE_SIZE_M);
+// Rotation/offset baked into the geometry itself (not the mesh transform)
+// so its BVH -- computed on raw local-space vertex data -- lives directly
+// in world space, matching every other collider mesh in the scene (which
+// all sit at identity transform already). Sized to cover the whole
+// municipality bbox (corners up to ~+-15.9km/+-15km from the local origin,
+// which sits at the bbox midpoint, not at the spawn point) with margin.
+// Subdivided into reasonably-sized triangles rather than one giant quad --
+// keeps the BVH's node bounds tight, which matters now that Controller
+// relies on capsuleCollision.js's supplementary piercing check.
+const groundGeometry = new THREE.PlaneGeometry(40000, 40000, 80, 80);
+groundGeometry.rotateX(-Math.PI / 2);
+groundGeometry.translate(0, -0.05, 0);
+const ground = new THREE.Mesh(groundGeometry, new THREE.MeshStandardMaterial({ color: 0x4a5240 }));
+engine.scene.add(ground);
+collider.setGround(ground);
 
 const tileManager = new TileManager(engine.scene, {
   tileSize: TILE_SIZE_M,
   loadRadius: LOAD_RADIUS,
   disposeRadius: DISPOSE_RADIUS,
+  onTileLoaded: (key, meshes) => collider.addTile(key, meshes.buildings),
+  onTileUnloaded: (key) => collider.removeTile(key),
 });
 
-// --- Temporary character preview: load, place at spawn, cycle through
-// idle/walk/run so scale + animation playback can be verified visually
-// ahead of the real controller + follow camera in later steps. ---
 const character = new Character();
-character.load().then(() => {
-  character.object.position.set(spawn.x, 0, spawn.z);
-  engine.scene.add(character.object);
+let controller = null;
 
-  const box = new THREE.Box3().setFromObject(character.object);
-  console.log(`[main] character loaded, height=${(box.max.y - box.min.y).toFixed(2)}m, fallback=${character._isFallback}`);
+// --- Temporary trailing camera (fixed offset behind the character based on
+// yaw, no obstruction handling) to verify movement + collision visually
+// ahead of the real raycast-pull-in follow camera in the next step. ---
+function updateTrailingCamera() {
+  const behind = new THREE.Vector3(-Math.sin(controller.yaw), 0, -Math.cos(controller.yaw)).multiplyScalar(-6);
+  const target = controller.position;
+  engine.camera.position.set(target.x + behind.x, target.y + 3.5, target.z + behind.z);
+  engine.camera.lookAt(target.x, target.y + 1.4, target.z);
+}
 
-  const cycle = ['idle', 'walk', 'run'];
-  let cycleIndex = 0;
-  setInterval(() => {
-    cycleIndex = (cycleIndex + 1) % cycle.length;
-    character.setState(cycle[cycleIndex]);
-  }, 3000);
+engine.onUpdate((delta) => {
+  const px = controller ? controller.position.x : spawn.x;
+  const pz = controller ? controller.position.z : spawn.z;
+  tileManager.update(px, pz);
 
-  window.__characterReady = true;
+  if (controller) {
+    controller.update(delta);
+    updateTrailingCamera();
+  } else {
+    character.update(delta);
+  }
 });
+
 window.__debugCharacter = character;
+window.__debugTileManager = tileManager; // for headless verification (tile counts)
+window.__debugCollider = collider;
 window.__engine = engine; // for headless verification (camera control, screenshots)
 
 let firstTileLoaded = false;
-const readyPromise = new Promise((resolve) => {
-  tileManager.onTileLoaded = () => {
+const firstTilePromise = new Promise((resolve) => {
+  const prevOnLoaded = tileManager.onTileLoaded;
+  tileManager.onTileLoaded = (key, meshes) => {
+    prevOnLoaded(key, meshes);
     if (!firstTileLoaded) {
       firstTileLoaded = true;
       resolve();
@@ -99,21 +100,16 @@ const readyPromise = new Promise((resolve) => {
   };
 });
 
-engine.onUpdate((delta) => {
-  updateFreeCam(delta);
-  tileManager.update(engine.camera.position.x, engine.camera.position.z);
-  character.update(delta);
-});
-
-window.__debugTileManager = tileManager; // for headless verification (tile counts)
-
-tileManager
-  .init()
+Promise.all([tileManager.init(), character.load()])
   .then(() => {
-    tileManager.update(engine.camera.position.x, engine.camera.position.z);
-    return readyPromise;
+    tileManager.update(spawn.x, spawn.z);
+    engine.scene.add(character.object);
+    controller = new Controller(character, collider);
+    controller.setPosition(spawn.x, 0, spawn.z);
+    window.__debugController = controller;
+    return firstTilePromise;
   })
-  .catch((err) => console.error('[main] tile manager init failed', err))
+  .catch((err) => console.error('[main] startup failed', err))
   .finally(() => markReady());
 
 engine.start();
