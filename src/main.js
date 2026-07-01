@@ -4,6 +4,7 @@ import { Engine } from './core/Engine.js';
 import { markReady } from './verify/smoke.js';
 import { isKeyDown } from './core/Input.js';
 import { TileManager } from './world/TileManager.js';
+import { Character } from './player/Character.js';
 import { projection, TILE_SIZE_M, LOAD_RADIUS, DISPOSE_RADIUS, FOG_COLOR, FOG_NEAR, FOG_FAR, SPAWN_LATLON } from './config.js';
 
 const container = document.getElementById('app');
@@ -37,8 +38,8 @@ engine.scene.add(ground);
 // up/down) to prove tile streaming works before the real third-person
 // character + FollowCamera land in later steps. ---
 const spawn = projection.project(SPAWN_LATLON.lat, SPAWN_LATLON.lon);
-engine.camera.position.set(spawn.x, 80, spawn.z + 150);
-let yaw = Math.PI; // facing back toward spawn (-Z is "forward" at yaw=0)
+engine.camera.position.set(spawn.x, 2.5, spawn.z + 8);
+let yaw = 0; // -Z is "forward" at yaw=0, i.e. facing back toward spawn from +Z
 
 function updateFreeCam(delta) {
   const turnSpeed = 1.6; // rad/s
@@ -65,6 +66,29 @@ const tileManager = new TileManager(engine.scene, {
   disposeRadius: DISPOSE_RADIUS,
 });
 
+// --- Temporary character preview: load, place at spawn, cycle through
+// idle/walk/run so scale + animation playback can be verified visually
+// ahead of the real controller + follow camera in later steps. ---
+const character = new Character();
+character.load().then(() => {
+  character.object.position.set(spawn.x, 0, spawn.z);
+  engine.scene.add(character.object);
+
+  const box = new THREE.Box3().setFromObject(character.object);
+  console.log(`[main] character loaded, height=${(box.max.y - box.min.y).toFixed(2)}m, fallback=${character._isFallback}`);
+
+  const cycle = ['idle', 'walk', 'run'];
+  let cycleIndex = 0;
+  setInterval(() => {
+    cycleIndex = (cycleIndex + 1) % cycle.length;
+    character.setState(cycle[cycleIndex]);
+  }, 3000);
+
+  window.__characterReady = true;
+});
+window.__debugCharacter = character;
+window.__engine = engine; // for headless verification (camera control, screenshots)
+
 let firstTileLoaded = false;
 const readyPromise = new Promise((resolve) => {
   tileManager.onTileLoaded = () => {
@@ -78,6 +102,7 @@ const readyPromise = new Promise((resolve) => {
 engine.onUpdate((delta) => {
   updateFreeCam(delta);
   tileManager.update(engine.camera.position.x, engine.camera.position.z);
+  character.update(delta);
 });
 
 window.__debugTileManager = tileManager; // for headless verification (tile counts)

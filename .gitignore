@@ -12,3 +12,5 @@ data/cache/
 
 # Generated character asset — reproducible via scripts/fetch_character.mjs
 public/assets/*.glb
+public/assets/*.gltf
+public/assets/*.bin
