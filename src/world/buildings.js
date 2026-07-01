@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import earcut from 'earcut';
+import { appendPolygonCap } from './polygonFill.js';
 
 // Shared material: buildings come from OSM ring data whose winding
 // direction isn't reliably consistent (mapper-dependent, and further
@@ -33,32 +33,9 @@ export function buildBuildingsGeometry(buildings) {
     const base = building.b || 0;
     if (height <= base) continue;
 
-    const holeIndices = [];
-    const flatAll = [];
-    let running = 0;
-    for (const ring of rings) {
-      if (running > 0) holeIndices.push(running);
-      for (let i = 0; i < ring.length; i++) flatAll.push(ring[i]);
-      running += ring.length / 2;
-    }
-
-    let tris;
-    try {
-      tris = earcut(flatAll, holeIndices.length ? holeIndices : null, 2);
-    } catch {
-      continue; // malformed ring — skip this building rather than corrupt the tile mesh
-    }
-    if (tris.length === 0) continue;
-
-    // --- top cap ---
-    const vertCount = flatAll.length / 2;
-    for (let i = 0; i < vertCount; i++) {
-      positions.push(flatAll[i * 2], height, flatAll[i * 2 + 1]);
-    }
-    for (let i = 0; i < tris.length; i++) {
-      indices.push(vertexOffset + tris[i]);
-    }
-    vertexOffset += vertCount;
+    const nextOffset = appendPolygonCap(rings, height, positions, indices, vertexOffset);
+    if (nextOffset === vertexOffset) continue; // malformed ring, cap build skipped it
+    vertexOffset = nextOffset;
 
     // --- walls: one quad per edge of every ring (outer + holes) ---
     for (const ring of rings) {

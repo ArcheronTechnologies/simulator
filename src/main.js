@@ -3,6 +3,8 @@ import './verify/smoke.js';
 import { Engine } from './core/Engine.js';
 import { markReady } from './verify/smoke.js';
 import { buildBuildingsGeometry, buildingsMaterial } from './world/buildings.js';
+import { buildWaterGeometry, waterMaterial, buildLanduseGeometry, landuseMaterial } from './world/areas.js';
+import { buildRoadsGeometry, roadsMaterial, buildRailGeometry, railMaterial } from './world/roads.js';
 import { TILE_SIZE_M } from './config.js';
 
 const container = document.getElementById('app');
@@ -40,10 +42,15 @@ engine.camera.lookAt(tileCenterX, 0, tileCenterZ);
 fetch(`./tiles/${TILE_KEY}.json`)
   .then((res) => res.json())
   .then((tile) => {
-    const geometry = buildBuildingsGeometry(tile.buildings);
-    const mesh = new THREE.Mesh(geometry, buildingsMaterial);
-    engine.scene.add(mesh);
-    console.log(`[main] loaded tile ${TILE_KEY}: ${tile.buildings.length} buildings`);
+    engine.scene.add(new THREE.Mesh(buildLanduseGeometry(tile.landuse), landuseMaterial));
+    engine.scene.add(new THREE.Mesh(buildWaterGeometry(tile.water), waterMaterial));
+    engine.scene.add(new THREE.Mesh(buildRoadsGeometry(tile.roads), roadsMaterial));
+    engine.scene.add(new THREE.Mesh(buildRailGeometry(tile.rail), railMaterial));
+    engine.scene.add(new THREE.Mesh(buildBuildingsGeometry(tile.buildings), buildingsMaterial));
+    console.log(
+      `[main] loaded tile ${TILE_KEY}: ${tile.buildings.length} buildings, ${tile.roads.length} roads, ` +
+        `${tile.water.length} water, ${tile.landuse.length} landuse, ${tile.rail.length} rail`
+    );
   })
   .catch((err) => {
     console.error('[main] failed to load tile', err);
