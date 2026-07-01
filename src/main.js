@@ -7,6 +7,7 @@ import { TileManager } from './world/TileManager.js';
 import { Character } from './player/Character.js';
 import { Collider } from './player/Collider.js';
 import { Controller } from './player/Controller.js';
+import { FollowCamera } from './player/FollowCamera.js';
 import { projection, TILE_SIZE_M, LOAD_RADIUS, DISPOSE_RADIUS, FOG_COLOR, FOG_NEAR, FOG_FAR, SPAWN_LATLON } from './config.js';
 
 const container = document.getElementById('app');
@@ -27,6 +28,8 @@ engine.camera.far = FOG_FAR + 200;
 engine.camera.updateProjectionMatrix();
 
 const spawn = projection.project(SPAWN_LATLON.lat, SPAWN_LATLON.lon);
+engine.camera.position.set(spawn.x, 2.5, spawn.z + 8);
+engine.camera.lookAt(spawn.x, 1.4, spawn.z);
 
 // Large flat ground plane, both visual (fills gaps between not-yet-loaded
 // tiles) and a collider (stops the player falling through gaps/before the
@@ -58,17 +61,8 @@ const tileManager = new TileManager(engine.scene, {
 });
 
 const character = new Character();
+const followCamera = new FollowCamera(engine.camera, engine.renderer.domElement);
 let controller = null;
-
-// --- Temporary trailing camera (fixed offset behind the character based on
-// yaw, no obstruction handling) to verify movement + collision visually
-// ahead of the real raycast-pull-in follow camera in the next step. ---
-function updateTrailingCamera() {
-  const behind = new THREE.Vector3(-Math.sin(controller.yaw), 0, -Math.cos(controller.yaw)).multiplyScalar(-6);
-  const target = controller.position;
-  engine.camera.position.set(target.x + behind.x, target.y + 3.5, target.z + behind.z);
-  engine.camera.lookAt(target.x, target.y + 1.4, target.z);
-}
 
 engine.onUpdate((delta) => {
   const px = controller ? controller.position.x : spawn.x;
@@ -76,8 +70,8 @@ engine.onUpdate((delta) => {
   tileManager.update(px, pz);
 
   if (controller) {
-    controller.update(delta);
-    updateTrailingCamera();
+    controller.update(delta, followCamera.yaw);
+    followCamera.update(controller.position, collider.nearbyColliders(px, pz), delta);
   } else {
     character.update(delta);
   }
@@ -86,6 +80,7 @@ engine.onUpdate((delta) => {
 window.__debugCharacter = character;
 window.__debugTileManager = tileManager; // for headless verification (tile counts)
 window.__debugCollider = collider;
+window.__debugFollowCamera = followCamera;
 window.__engine = engine; // for headless verification (camera control, screenshots)
 
 let firstTileLoaded = false;

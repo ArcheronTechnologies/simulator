@@ -6,7 +6,7 @@ const GRAVITY = -30; // m/s^2, a bit stronger than real-world for snappier game 
 const WALK_SPEED = 3.2; // m/s, real human walking pace
 const RUN_SPEED = 6.5; // m/s, real human jogging pace
 const JUMP_SPEED = 8;
-const TURN_SPEED = 2.4; // rad/s
+const FACING_TURN_SPEED = 12; // rad/s, how fast the character visually turns to face movement
 
 const CAPSULE_RADIUS = 0.35;
 const CAPSULE_HEIGHT = 1.8; // matches the loaded character's real height
@@ -15,11 +15,18 @@ const CAPSULE_HEIGHT = 1.8; // matches the loaded character's real height
 // forward = (-sin(yaw), 0, -cos(yaw)) convention used throughout the app.
 const MODEL_FORWARD_OFFSET = 0;
 
+function shortestAngleDelta(from, to) {
+  return Math.atan2(Math.sin(to - from), Math.cos(to - from));
+}
+
 /**
  * Capsule-vs-BVH character controller: gravity, WASD movement relative to
- * yaw, and three-mesh-bvh shapecast depenetration against the nearby
- * streamed tile colliders (ground + buildings). Position is tracked at the
- * feet/ground-contact point, matching how Character's model is authored.
+ * the camera's yaw, and three-mesh-bvh shapecast depenetration against the
+ * nearby streamed tile colliders (ground + buildings). Position is tracked
+ * at the feet/ground-contact point, matching how Character's model is
+ * authored. The character's visual facing eases toward its movement
+ * direction rather than snapping to the camera yaw directly, so strafing
+ * doesn't look like sliding.
  */
 export class Controller {
   constructor(character, collider) {
@@ -28,7 +35,7 @@ export class Controller {
 
     this.position = new THREE.Vector3();
     this.velocity = new THREE.Vector3();
-    this.yaw = 0;
+    this.facingYaw = 0;
     this.isOnGround = false;
 
     this._moving = false;
@@ -52,24 +59,23 @@ export class Controller {
     this._syncVisual();
   }
 
-  update(delta) {
-    this._applyInput(delta);
+  /** @param {number} cameraYaw - movement directions (WASD) are relative to this */
+  update(delta, cameraYaw) {
+    this._applyInput(delta, cameraYaw);
     this._applyGravityAndIntegrate(delta);
     this._resolveCollisions(delta);
+    this._updateFacing(delta);
     this._syncVisual();
     this._updateAnimationState();
     this.character.update(delta);
   }
 
-  _applyInput(delta) {
-    if (isKeyDown('ArrowLeft')) this.yaw += TURN_SPEED * delta;
-    if (isKeyDown('ArrowRight')) this.yaw -= TURN_SPEED * delta;
-
+  _applyInput(delta, cameraYaw) {
     this._running = isKeyDown('ShiftLeft') || isKeyDown('ShiftRight');
     const speed = this._running ? RUN_SPEED : WALK_SPEED;
 
-    this._forward.set(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
-    this._right.set(-Math.cos(this.yaw), 0, Math.sin(this.yaw));
+    this._forward.set(-Math.sin(cameraYaw), 0, -Math.cos(cameraYaw));
+    this._right.set(-Math.cos(cameraYaw), 0, Math.sin(cameraYaw));
 
     this._moveVec.set(0, 0, 0);
     if (isKeyDown('KeyW')) this._moveVec.add(this._forward);
@@ -79,8 +85,8 @@ export class Controller {
 
     this._moving = this._moveVec.lengthSq() > 0;
     if (this._moving) {
-      this._moveVec.normalize().multiplyScalar(speed * delta);
-      this.position.add(this._moveVec);
+      this._moveVec.normalize();
+      this.position.addScaledVector(this._moveVec, speed * delta);
     }
 
     if (isKeyDown('Space') && this.isOnGround) {
@@ -153,9 +159,17 @@ export class Controller {
     }
   }
 
+  _updateFacing(delta) {
+    if (!this._moving) return;
+    const targetYaw = Math.atan2(-this._moveVec.x, -this._moveVec.z);
+    const delta_ = shortestAngleDelta(this.facingYaw, targetYaw);
+    const maxStep = FACING_TURN_SPEED * delta;
+    this.facingYaw += Math.abs(delta_) <= maxStep ? delta_ : Math.sign(delta_) * maxStep;
+  }
+
   _syncVisual() {
     this.character.object.position.copy(this.position);
-    this.character.object.rotation.y = this.yaw + MODEL_FORWARD_OFFSET;
+    this.character.object.rotation.y = this.facingYaw + MODEL_FORWARD_OFFSET;
   }
 
   _updateAnimationState() {
