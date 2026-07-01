@@ -1,18 +1,6 @@
 import * as THREE from 'three';
 import { appendPolygonCap } from './polygonFill.js';
 
-// Shared material: buildings come from OSM ring data whose winding
-// direction isn't reliably consistent (mapper-dependent, and further
-// scrambled by our lat/lon -> x/z projection), so front-face culling would
-// make some walls/caps invisible depending on source data. DoubleSide is a
-// small, well-understood fill-rate cost that removes that whole bug class.
-export const buildingsMaterial = new THREE.MeshStandardMaterial({
-  color: 0x9a8f80,
-  roughness: 0.9,
-  metalness: 0.0,
-  side: THREE.DoubleSide,
-});
-
 /**
  * Builds one merged BufferGeometry for every building in a tile: a top cap
  * (earcut-triangulated, holes supported) at y=height, and wall quads per

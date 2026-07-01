@@ -6,13 +6,6 @@ import { appendPolygonCap } from './polygonFill.js';
 const WATER_Y = 0.02;
 const LANDUSE_Y = 0.01;
 
-export const waterMaterial = new THREE.MeshStandardMaterial({
-  color: 0x3f6f8f,
-  roughness: 0.3,
-  metalness: 0.1,
-  side: THREE.DoubleSide,
-});
-
 // Visual variety by landuse/leisure type enum (see osm_to_tiles.mjs).
 const LANDUSE_COLORS = {
   0: 0x4f7a3d, // park
@@ -27,14 +20,6 @@ const LANDUSE_COLORS = {
   9: 0x707060, // default
 };
 const DEFAULT_LANDUSE_COLOR = 0x707060;
-
-export const landuseMaterial = new THREE.MeshStandardMaterial({
-  color: 0xffffff,
-  vertexColors: true,
-  roughness: 1.0,
-  metalness: 0.0,
-  side: THREE.DoubleSide,
-});
 
 /** @param {Array<{r: number[][]}>} water - tile.water */
 export function buildWaterGeometry(water) {

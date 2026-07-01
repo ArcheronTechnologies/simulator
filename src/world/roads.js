@@ -30,20 +30,6 @@ const ROAD_COLORS = {
 const DEFAULT_ROAD_COLOR = 0x707070;
 
 const RAIL_WIDTH_M = 1.5; // rails + ties, not the wider ballast bed
-const RAIL_COLOR = 0x3a3a3a;
-
-export const roadsMaterial = new THREE.MeshStandardMaterial({
-  color: 0xffffff,
-  vertexColors: true,
-  roughness: 1.0,
-  metalness: 0.0,
-});
-
-export const railMaterial = new THREE.MeshStandardMaterial({
-  color: RAIL_COLOR,
-  roughness: 0.6,
-  metalness: 0.4,
-});
 
 /**
  * Appends one ribbon quad per polyline segment (no miter joins at bends —
