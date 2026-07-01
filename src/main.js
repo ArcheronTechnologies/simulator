@@ -12,9 +12,11 @@ import { LoadingScreen } from './ui/LoadingScreen.js';
 import { Hud } from './ui/Hud.js';
 import { GameClock } from './sim/GameClock.js';
 import { SkyController } from './sim/SkyController.js';
+import { loadCitizenModel } from './sim/citizenModel.js';
+import { CitizenBodyPool } from './sim/CitizenBodyPool.js';
 import {
   projection, TILE_SIZE_M, LOAD_RADIUS, DISPOSE_RADIUS, FOG_COLOR, FOG_NEAR, FOG_FAR, SPAWN_LATLON,
-  DAY_LENGTH_MINUTES, START_HOUR, START_DAY,
+  DAY_LENGTH_MINUTES, START_HOUR, START_DAY, MAX_RENDERED_CITIZENS,
 } from './config.js';
 
 const loadingScreen = new LoadingScreen();
@@ -117,6 +119,27 @@ window.__debugFollowCamera = followCamera;
 window.__debugGameClock = gameClock; // for headless verification (time of day)
 window.__debugSky = skyController;
 window.__engine = engine; // for headless verification (camera control, screenshots)
+
+// Debug/perf hook: spawn N animated citizen bodies in a grid near the player to
+// stress the skinned-mesh budget (used by the perf gate). Kept as a tool.
+let _testPool = null;
+window.__spawnCitizenTest = async (n) => {
+  await loadCitizenModel();
+  if (!_testPool) {
+    _testPool = new CitizenBodyPool(engine.scene, MAX_RENDERED_CITIZENS);
+    engine.onUpdate((delta) => _testPool.update(delta));
+    window.__debugCitizenPool = _testPool;
+  }
+  _testPool.releaseAll();
+  const cols = 15;
+  for (let i = 0; i < n; i++) {
+    const body = _testPool.acquire(100000 + i);
+    if (!body) break;
+    body.setPositionYaw(spawn.x + (i % cols) * 1.6 - 12, 0, spawn.z + Math.floor(i / cols) * 1.6, i * 0.4);
+    body.setState('walk');
+  }
+  return _testPool.activeCount;
+};
 
 let firstTileLoaded = false;
 const firstTilePromise = new Promise((resolve) => {
