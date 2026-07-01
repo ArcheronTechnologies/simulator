@@ -11,7 +11,8 @@
     "data:core": "node scripts/fetch_overpass.mjs --core",
     "data:all": "node scripts/fetch_overpass.mjs --all",
     "fetch:character": "node scripts/fetch_character.mjs",
-    "verify": "node scripts/verify.mjs"
+    "verify": "node scripts/verify.mjs",
+    "test": "node --test scripts/lib/*.test.mjs"
   },
   "dependencies": {
     "three": "^0.185.0",
