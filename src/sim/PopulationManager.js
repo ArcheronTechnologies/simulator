@@ -1,17 +1,20 @@
-import { scheduleState, AtWork, Leisure, Commuting } from '../../scripts/lib/schedule.mjs';
+import { scheduleState, Leisure, Commuting } from '../../scripts/lib/schedule.mjs';
 import { nearestPointOnPolylines } from '../../scripts/lib/spatial.mjs';
+import { stepAlongRoads } from './RoadFollower.js';
 import { unitHash } from '../../scripts/lib/hash.mjs';
 
 // Orchestrates the citizen simulation with tile-driven agent LOD. The ~120k
 // population is dormant; only citizens homed in loaded tiles are candidates,
 // and only the nearest ~capacity within the activation radius get pooled bodies.
 // Per-frame cost scales with the visible crowd, not the total population.
-const RECONCILE_TICK = 10; // frames between body reconciliation (bodies interpolate between)
+const RECONCILE_TICK = 10; // frames between acquire/release reconciliation
 // Place a citizen on the nearest road within this of their anchor. Generous:
 // a big building's centroid can sit deep in a block, and standing on a street
 // 80m away reads far better than embedded in the footprint. Only genuinely
 // road-less spots (fields, car parks) fall back to the raw anchor.
 const SNAP_MAX_M = 130;
+const WALK_SPEED_MPS = 1.35; // leisurely pedestrian pace
+const ARRIVE_DIST_M = 4; // within this of the destination, stand and idle
 
 export class PopulationManager {
   constructor({ store, pool, clock, tileManager, activationRadius, releaseRadius, capacity, tileSize = 500 }) {
@@ -50,6 +53,7 @@ export class PopulationManager {
   update(delta, playerX, playerZ) {
     this._frame++;
     if (this._frame % RECONCILE_TICK === 0) this._reconcile(playerX, playerZ);
+    this._advanceBodies(delta);
     this.pool.update(delta);
   }
 
@@ -57,16 +61,35 @@ export class PopulationManager {
     return this.pool.activeCount;
   }
 
+  _isOutdoor(s) {
+    return s.activity === Commuting || s.activity === Leisure;
+  }
+
   _reconcile(px, pz) {
     const t = this.clock.minutesOfDay;
     const day = this.clock.day;
     const rAct2 = this.activationRadius * this.activationRadius;
     const rRel2 = this.releaseRadius * this.releaseRadius;
-    // Only tiles whose area can reach the player matter; skip far loaded tiles.
     const tileReach = this.releaseRadius + this.tileSize;
 
+    // A. Release/refresh already-active bodies. Uses the body's record + real
+    // (walked) position, so it's independent of the tile pre-filter below.
+    for (const [id, body] of [...this.pool.active]) {
+      const s = scheduleState(body.rec, t, day);
+      const bx = body.object.position.x;
+      const bz = body.object.position.z;
+      if (!this._isOutdoor(s) || (bx - px) ** 2 + (bz - pz) ** 2 > rRel2) {
+        this.pool.release(id);
+        continue;
+      }
+      const dest = this._destAnchor(body.rec, s);
+      body.destX = dest[0];
+      body.destZ = dest[1];
+    }
+
+    // B. Consider citizens homed in nearby tiles for NEW bodies.
     const counts = { AtHome: 0, AtWork: 0, Commuting: 0, Leisure: 0 };
-    const inRange = [];
+    const candidates = [];
     for (const key of this._activeTiles) {
       const [tx, tz] = key.split('_').map(Number);
       const cx = (tx + 0.5) * this.tileSize;
@@ -76,65 +99,71 @@ export class PopulationManager {
       for (const rec of this.store.getCitizens(key)) {
         const s = scheduleState(rec, t, day);
         counts[s.activity]++;
-        // Only render citizens who are OUTDOORS. AtHome/AtWork means indoors
-        // (asleep, working) — invisible. This is what empties the streets at
-        // 3am and fills them during commutes/leisure.
-        if (s.activity !== Commuting && s.activity !== Leisure) continue;
-        const anchor = this._anchorPos(rec, s);
-        const dx = anchor[0] - px;
-        const dz = anchor[1] - pz;
-        const dsq = dx * dx + dz * dz;
-        if (dsq <= rRel2) inRange.push({ rec, s, ax: anchor[0], az: anchor[1], dsq });
+        if (!this._isOutdoor(s) || this.pool.isActive(rec.id)) continue;
+        const start = this._startAnchor(rec, s);
+        const dsq = (start[0] - px) ** 2 + (start[1] - pz) ** 2;
+        if (dsq <= rAct2) candidates.push({ rec, s, dsq });
       }
     }
-
     this._activityCounts = counts;
-    inRange.sort((a, b) => a.dsq - b.dsq);
-    const keep = inRange.slice(0, this.capacity);
-    const keepIds = new Set(keep.map((k) => k.rec.id));
 
-    // Release any active body whose citizen fell outside the keep set
-    // (beyond the release radius, or bumped past the nearest-capacity cap).
-    for (const id of [...this.pool.active.keys()]) {
-      if (!keepIds.has(id)) this.pool.release(id);
+    // C. Acquire nearest-first until the pool is full.
+    candidates.sort((a, b) => a.dsq - b.dsq);
+    for (const c of candidates) {
+      if (!this.pool.hasFree) break;
+      const body = this.pool.acquire(c.rec.id);
+      if (!body) break;
+      body.rec = c.rec;
+      const start = this._snapToRoad(this._startAnchor(c.rec, c.s));
+      body.setPositionYaw(start[0], 0, start[1], unitHash(c.rec.id, 'yaw') * Math.PI * 2);
+      const dest = this._destAnchor(c.rec, c.s);
+      body.destX = dest[0];
+      body.destZ = dest[1];
     }
+  }
 
-    // Acquire/position the kept citizens, nearest first. New bodies are only
-    // acquired within the inner activation radius (hysteresis vs the release
-    // radius keeps bodies from flickering at the boundary).
-    for (const k of keep) {
-      let body = this.pool.active.get(k.rec.id);
-      if (!body) {
-        if (k.dsq > rAct2) continue;
-        body = this.pool.acquire(k.rec.id);
-        if (!body) break; // pool full; remaining are farther (sorted), so stop
+  /** Per-frame: walk every active body toward its destination along the roads. */
+  _advanceBodies(delta) {
+    const step = WALK_SPEED_MPS * delta;
+    for (const body of this.pool.active.values()) {
+      const bx = body.object.position.x;
+      const bz = body.object.position.z;
+      const dd = Math.hypot(body.destX - bx, body.destZ - bz);
+      if (dd < ARRIVE_DIST_M) {
+        body.setState('idle'); // arrived — mill/stand
+        continue;
       }
-      this._placeBody(body, k);
+      const roads = this.tileManager.getNearbyRoads(bx, bz);
+      const next = stepAlongRoads(bx, bz, roads, body.destX, body.destZ, step);
+      body.setPositionYaw(next.x, 0, next.z, next.yaw);
+      body.setState('walk');
     }
   }
 
-  _anchorPos(rec, s) {
-    if (s.activity === AtWork) return rec.workXZ;
+  /** Where a citizen currently is (for selection/spawn): the departure anchor. */
+  _startAnchor(rec, s) {
     if (s.activity === Leisure) return rec.leisureXZ;
-    if (s.activity === Commuting) {
-      // v1: hold at the departure anchor (RoadFollower will animate the walk).
-      return s.from === 'work' ? rec.workXZ : s.from === 'leisure' ? rec.leisureXZ : rec.homeXZ;
-    }
-    return rec.homeXZ; // AtHome
+    return this._namedAnchor(rec, s.from); // Commuting: leaving `from`
   }
 
-  _placeBody(body, k) {
-    // Snap onto the nearest street so citizens stand at their doorstep, not
-    // embedded in the building footprint.
-    const roads = this.tileManager.getNearbyRoads(k.ax, k.az);
-    let x = k.ax;
-    let z = k.az;
+  /** Where a citizen is headed (for walking): the arrival anchor. */
+  _destAnchor(rec, s) {
+    if (s.activity === Leisure) return rec.leisureXZ;
+    return this._namedAnchor(rec, s.to); // Commuting: toward `to`
+  }
+
+  _namedAnchor(rec, anchor) {
+    if (anchor === 'work') return rec.workXZ;
+    if (anchor === 'leisure') return rec.leisureXZ;
+    return rec.homeXZ;
+  }
+
+  _snapToRoad([ax, az]) {
+    const roads = this.tileManager.getNearbyRoads(ax, az);
     if (roads.length) {
-      const snap = nearestPointOnPolylines(roads, k.ax, k.az);
-      if (snap && snap.dist <= SNAP_MAX_M) { x = snap.x; z = snap.z; }
+      const snap = nearestPointOnPolylines(roads, ax, az);
+      if (snap && snap.dist <= SNAP_MAX_M) return [snap.x, snap.z];
     }
-    const yaw = unitHash(k.rec.id, 'yaw') * Math.PI * 2;
-    body.setPositionYaw(x, 0, z, yaw);
-    body.setState('idle');
+    return [ax, az];
   }
 }

@@ -31,6 +31,10 @@ export class CitizenBody {
 
     this.citizenId = null;
     this.inUse = false;
+    // Walking state, driven by PopulationManager + RoadFollower.
+    this.rec = null; // the citizen record this body currently represents
+    this.destX = 0;
+    this.destZ = 0;
     this._tmpColor = new THREE.Color();
   }
 
@@ -60,6 +64,7 @@ export class CitizenBody {
   release() {
     this.inUse = false;
     this.citizenId = null;
+    this.rec = null;
     this.object.visible = false;
   }
 
