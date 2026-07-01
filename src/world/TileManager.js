@@ -76,6 +76,12 @@ export class TileManager {
     this.namedRoads = new Map(); // key -> [{n, p}] for loaded tiles
     this._fetchedNamedRoads = new Map(); // key -> [{n, p}] while a tile is in flight
 
+    // Full road polylines per loaded tile (named + unnamed), used by citizen
+    // movement to snap/walk on real streets. Kept lightweight (just the point
+    // arrays), separate from the render geometry.
+    this.tileRoads = new Map(); // key -> [{p, n?}]
+    this._fetchedRoads = new Map(); // key -> [{p, n?}] while a tile is in flight
+
     this.workers = [];
     for (let i = 0; i < WORKER_COUNT; i++) {
       const worker = new Worker(new URL('./TileBuilder.worker.js', import.meta.url), { type: 'module' });
@@ -159,6 +165,7 @@ export class TileManager {
       if (!res.ok) throw new Error(`HTTP ${res.status} fetching tile ${key}`);
       const tile = await res.json();
       this._fetchedNamedRoads.set(key, tile.roads.filter((r) => r.n));
+      this._fetchedRoads.set(key, tile.roads);
       this._pickWorker().postMessage({ type: 'build', key, tile });
     } catch (err) {
       console.error(`[TileManager] failed to load tile ${key}:`, err);
@@ -174,7 +181,9 @@ export class TileManager {
     this.readyQueue.push(() => {
       this.pending.delete(key);
       const namedRoads = this._fetchedNamedRoads.get(key) ?? [];
+      const allRoads = this._fetchedRoads.get(key) ?? [];
       this._fetchedNamedRoads.delete(key);
+      this._fetchedRoads.delete(key);
       if (this.loaded.has(key)) return;
 
       // The player may have moved on while this tile was in flight —
@@ -187,6 +196,7 @@ export class TileManager {
       }
 
       this.namedRoads.set(key, namedRoads);
+      this.tileRoads.set(key, allRoads);
       this._integrateTile(key, layers);
     });
   }
@@ -241,6 +251,7 @@ export class TileManager {
     }
     this.loaded.delete(key);
     this.namedRoads.delete(key);
+    this.tileRoads.delete(key);
   }
 
   /** Nearest named-road label within maxDist of a world position, or null. */
@@ -254,6 +265,22 @@ export class TileManager {
       }
     }
     return nearestRoadName(nearbyRoadLists, x, z, maxDist);
+  }
+
+  /**
+   * All road polylines ({p, n?}) in the 3x3 tiles around a world position, for
+   * citizen movement (snap-to-street + road following). Flat list.
+   */
+  getNearbyRoads(x, z) {
+    const { tx, tz } = tileIndex(x, z, this.tileSize);
+    const out = [];
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dz = -1; dz <= 1; dz++) {
+        const roads = this.tileRoads.get(tileKey(tx + dx, tz + dz));
+        if (roads) for (const r of roads) out.push(r);
+      }
+    }
+    return out;
   }
 
   /** Disposes every loaded tile and terminates the worker pool. */

@@ -14,9 +14,12 @@ import { GameClock } from './sim/GameClock.js';
 import { SkyController } from './sim/SkyController.js';
 import { loadCitizenModel } from './sim/citizenModel.js';
 import { CitizenBodyPool } from './sim/CitizenBodyPool.js';
+import { PopulationStore } from './sim/PopulationStore.js';
+import { PopulationManager } from './sim/PopulationManager.js';
 import {
   projection, TILE_SIZE_M, LOAD_RADIUS, DISPOSE_RADIUS, FOG_COLOR, FOG_NEAR, FOG_FAR, SPAWN_LATLON,
   DAY_LENGTH_MINUTES, START_HOUR, START_DAY, MAX_RENDERED_CITIZENS,
+  CITIZEN_POP_BASE_URL, CITIZEN_ACTIVATION_RADIUS_M, CITIZEN_RELEASE_RADIUS_M,
 } from './config.js';
 
 const loadingScreen = new LoadingScreen();
@@ -68,12 +71,23 @@ const ground = new THREE.Mesh(groundGeometry, new THREE.MeshStandardMaterial({ c
 engine.scene.add(ground);
 collider.setGround(ground);
 
+// Population lives behind the same tile lifecycle as collision: when a tile's
+// geometry loads/unloads, its citizens activate/deactivate too.
+const populationStore = new PopulationStore({ baseUrl: CITIZEN_POP_BASE_URL, tileSize: TILE_SIZE_M });
+let population = null; // created once the citizen model has loaded
+
 const tileManager = new TileManager(engine.scene, {
   tileSize: TILE_SIZE_M,
   loadRadius: LOAD_RADIUS,
   disposeRadius: DISPOSE_RADIUS,
-  onTileLoaded: (key, meshes) => collider.addTile(key, meshes.buildings),
-  onTileUnloaded: (key) => collider.removeTile(key),
+  onTileLoaded: (key, meshes) => {
+    collider.addTile(key, meshes.buildings);
+    if (population) population.onTileLoaded(key);
+  },
+  onTileUnloaded: (key) => {
+    collider.removeTile(key);
+    if (population) population.onTileUnloaded(key);
+  },
 });
 
 const character = new Character();
@@ -88,10 +102,15 @@ engine.onUpdate((delta) => {
   gameClock.update(delta);
   skyController.update(gameClock);
 
+  if (population) population.update(delta, px, pz);
+
   if (controller) {
     controller.update(delta, followCamera.yaw);
     followCamera.update(controller.position, collider.nearbyColliders(px, pz), delta);
-    hud.update(delta, { position: controller.position, cameraYaw: followCamera.yaw, tileManager, clock: gameClock });
+    hud.update(delta, {
+      position: controller.position, cameraYaw: followCamera.yaw, tileManager, clock: gameClock,
+      citizenCount: population ? population.renderedCount : null,
+    });
   } else {
     character.update(delta);
   }
@@ -120,27 +139,6 @@ window.__debugGameClock = gameClock; // for headless verification (time of day)
 window.__debugSky = skyController;
 window.__engine = engine; // for headless verification (camera control, screenshots)
 
-// Debug/perf hook: spawn N animated citizen bodies in a grid near the player to
-// stress the skinned-mesh budget (used by the perf gate). Kept as a tool.
-let _testPool = null;
-window.__spawnCitizenTest = async (n) => {
-  await loadCitizenModel();
-  if (!_testPool) {
-    _testPool = new CitizenBodyPool(engine.scene, MAX_RENDERED_CITIZENS);
-    engine.onUpdate((delta) => _testPool.update(delta));
-    window.__debugCitizenPool = _testPool;
-  }
-  _testPool.releaseAll();
-  const cols = 15;
-  for (let i = 0; i < n; i++) {
-    const body = _testPool.acquire(100000 + i);
-    if (!body) break;
-    body.setPositionYaw(spawn.x + (i % cols) * 1.6 - 12, 0, spawn.z + Math.floor(i / cols) * 1.6, i * 0.4);
-    body.setState('walk');
-  }
-  return _testPool.activeCount;
-};
-
 let firstTileLoaded = false;
 const firstTilePromise = new Promise((resolve) => {
   const prevOnLoaded = tileManager.onTileLoaded;
@@ -153,13 +151,32 @@ const firstTilePromise = new Promise((resolve) => {
   };
 });
 
-Promise.all([tileManager.init(), character.load()])
+Promise.all([tileManager.init(), character.load(), loadCitizenModel(), populationStore.init()])
   .then(() => {
-    tileManager.update(spawn.x, spawn.z);
     engine.scene.add(character.object);
     controller = new Controller(character, collider);
     controller.setPosition(spawn.x, 0, spawn.z);
     window.__debugController = controller;
+
+    // The citizen model is loaded, so the pooled bodies can be built now.
+    const citizenPool = new CitizenBodyPool(engine.scene, MAX_RENDERED_CITIZENS);
+    population = new PopulationManager({
+      store: populationStore,
+      pool: citizenPool,
+      clock: gameClock,
+      tileManager,
+      activationRadius: CITIZEN_ACTIVATION_RADIUS_M,
+      releaseRadius: CITIZEN_RELEASE_RADIUS_M,
+      capacity: MAX_RENDERED_CITIZENS,
+      tileSize: TILE_SIZE_M,
+    });
+    window.__debugPopulation = population;
+    window.__debugCitizenPool = citizenPool;
+
+    // Any tiles that streamed in before the population existed need activating.
+    for (const key of tileManager.loaded.keys()) population.onTileLoaded(key);
+
+    tileManager.update(spawn.x, spawn.z);
     return firstTilePromise;
   })
   .catch((err) => console.error('[main] startup failed', err))
