@@ -6,18 +6,20 @@ import { appendPolygonCap } from './polygonFill.js';
 const WATER_Y = 0.02;
 const LANDUSE_Y = 0.01;
 
-// Visual variety by landuse/leisure type enum (see osm_to_tiles.mjs).
+// Visual variety by landuse/leisure/natural type enum (see osm_to_tiles.mjs).
 const LANDUSE_COLORS = {
   0: 0x4f7a3d, // park
   1: 0x5c8a4a, // garden
   2: 0x5a9c5a, // pitch
   3: 0x8a9a6a, // playground
-  4: 0x2f5530, // forest/wood
+  4: 0x2f5530, // forest/wood/scrub
   5: 0x6b6455, // residential landuse
   6: 0x726a5e, // commercial/industrial/retail
-  7: 0x9a9560, // farmland/farmyard/meadow/grass
+  7: 0x9a9560, // farmland/farmyard/meadow/grass/grassland/heath
   8: 0x77836f, // cemetery
   9: 0x707060, // default
+  10: 0x5a7a5f, // wetland
+  11: 0xc2b280, // beach
 };
 const DEFAULT_LANDUSE_COLOR = 0x707060;
 

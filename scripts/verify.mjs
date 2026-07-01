@@ -1,5 +1,6 @@
-// Headless smoke test: builds the app, serves it, and confirms it renders
-// without errors. Extended in later steps to assert player movement.
+// Headless smoke test: builds the app, serves it, confirms it renders
+// without errors, and drives real simulated keyboard input to prove the
+// player can actually move (not just that the scene renders).
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -82,6 +83,22 @@ async function main() {
     await page.goto(URL, { waitUntil: 'load' });
 
     await page.waitForFunction(() => window.__READY__ === true, { timeout: 30000 });
+    await page.waitForFunction(() => window.__debugController != null, { timeout: 15000 });
+
+    // Real simulated key input, exercising the actual Input.js listener
+    // path end to end -- not directly poking controller state.
+    console.log('[verify] holding KeyW to verify the player actually moves...');
+    const posBefore = await page.evaluate(() => window.__debugController.position.toArray());
+    await page.keyboard.down('KeyW');
+    await sleep(1500);
+    await page.keyboard.up('KeyW');
+    const posAfter = await page.evaluate(() => window.__debugController.position.toArray());
+    const movedDist = Math.hypot(posAfter[0] - posBefore[0], posAfter[2] - posBefore[2]);
+
+    const renderInfo = await page.evaluate(() => {
+      const info = window.__engine.renderer.info;
+      return { triangles: info.render.triangles, calls: info.render.calls };
+    });
 
     const jsErrors = await page.evaluate(() => window.__ERRORS__ || []);
     const allErrors = [...pageErrors, ...jsErrors];
@@ -101,12 +118,28 @@ async function main() {
 
     console.log('[verify] errors:', allErrors);
     console.log('[verify] non-black center pixel:', isNonBlack);
+    console.log(`[verify] player moved ${movedDist.toFixed(2)}m holding KeyW for 1.5s`);
+    console.log('[verify] render info:', renderInfo);
 
+    const failures = [];
     if (allErrors.length > 0) {
-      throw new Error(`Page reported ${allErrors.length} error(s): ${allErrors.join(' | ')}`);
+      failures.push(`Page reported ${allErrors.length} error(s): ${allErrors.join(' | ')}`);
     }
     if (!isNonBlack) {
-      throw new Error('Canvas center pixel is black — scene likely did not render.');
+      failures.push('Canvas center pixel is black — scene likely did not render.');
+    }
+    if (movedDist < 0.5) {
+      failures.push(`Player barely moved (${movedDist.toFixed(2)}m) holding KeyW — input/controller pipeline likely broken.`);
+    }
+    if (renderInfo.triangles <= 0) {
+      failures.push('renderer.info.render.triangles is 0 — nothing real was drawn.');
+    }
+    if (renderInfo.calls <= 0 || renderInfo.calls > 2000) {
+      failures.push(`renderer.info.render.calls (${renderInfo.calls}) is outside the sane 1-2000 band.`);
+    }
+
+    if (failures.length > 0) {
+      throw new Error(failures.join(' | '));
     }
 
     console.log('[verify] PASS');
@@ -122,7 +155,7 @@ function run(cmd, args) {
   });
 }
 
-const OVERALL_TIMEOUT_MS = 90000;
+const OVERALL_TIMEOUT_MS = 120000;
 const timeout = new Promise((_, reject) =>
   setTimeout(() => reject(new Error(`verify timed out after ${OVERALL_TIMEOUT_MS}ms`)), OVERALL_TIMEOUT_MS)
 );

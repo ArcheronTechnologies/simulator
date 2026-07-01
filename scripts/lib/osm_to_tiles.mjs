@@ -17,14 +17,17 @@ const ROAD_CLASSES = {
 const DEFAULT_ROAD_CLASS = 4;
 
 const PARK_LEISURE = new Set(['park', 'garden', 'pitch', 'playground', 'nature_reserve']);
+const NATURAL_AREAS = new Set(['wood', 'scrub', 'heath', 'grassland', 'wetland', 'beach']);
 
 const LANDUSE_TYPES = {
   park: 0, garden: 1, pitch: 2, playground: 3, nature_reserve: 0,
-  forest: 4, wood: 4,
+  forest: 4, wood: 4, scrub: 4,
   residential: 5,
   commercial: 6, industrial: 6, retail: 6,
-  farmland: 7, farmyard: 7, meadow: 7, grass: 7,
+  farmland: 7, farmyard: 7, meadow: 7, grass: 7, grassland: 7, heath: 7,
   cemetery: 8,
+  wetland: 10,
+  beach: 11,
 };
 const DEFAULT_LANDUSE_TYPE = 9;
 
@@ -33,12 +36,16 @@ function roadClassOf(highwayTag) {
 }
 
 function landuseTypeOf(tags) {
-  const key = tags.landuse || tags.leisure;
+  const key = tags.landuse || tags.leisure || tags.natural;
   return LANDUSE_TYPES[key] ?? DEFAULT_LANDUSE_TYPE;
 }
 
 function isParkLeisure(leisure) {
   return leisure != null && PARK_LEISURE.has(leisure);
+}
+
+function isNaturalArea(natural) {
+  return natural != null && NATURAL_AREAS.has(natural);
 }
 
 function heightForBuilding(tags, levelHeightM, typeHeights) {
@@ -165,7 +172,7 @@ export function convertToFeatures(elements, { project, levelHeightM, typeHeights
       continue;
     }
 
-    const isLanduseArea = tags.landuse || isParkLeisure(tags.leisure);
+    const isLanduseArea = tags.landuse || isParkLeisure(tags.leisure) || isNaturalArea(tags.natural);
     if (el.type === 'way' && isLanduseArea && el.geometry?.length >= 4) {
       landuse.push({ type: landuseTypeOf(tags), outer: projectRing(toLatLonTuples(el.geometry)), holes: [] });
       continue;

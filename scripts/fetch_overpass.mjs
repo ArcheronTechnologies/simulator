@@ -51,6 +51,8 @@ function overpassQuery(bbox) {
   relation["landuse"]["type"="multipolygon"](${b});
   way["leisure"~"^(park|garden|pitch|playground|nature_reserve)$"](${b});
   relation["leisure"~"^(park|garden|pitch|playground|nature_reserve)$"]["type"="multipolygon"](${b});
+  way["natural"~"^(wood|scrub|heath|grassland|wetland|beach)$"](${b});
+  relation["natural"~"^(wood|scrub|heath|grassland|wetland|beach)$"]["type"="multipolygon"](${b});
 );
 out geom;
 `.trim();
