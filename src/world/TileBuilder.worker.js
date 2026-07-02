@@ -38,14 +38,18 @@ self.onmessage = (event) => {
   const { type, key, tile } = event.data;
   if (type !== 'build') return;
 
-  const layers = {
-    buildings: tile.buildings.length ? extractLayer(buildBuildingsGeometry(tile.buildings)) : null,
-    roads: tile.roads.length ? extractLayer(buildRoadsGeometry(tile.roads)) : null,
-    water: tile.water.length ? extractLayer(buildWaterGeometry(tile.water)) : null,
-    landuse: tile.landuse.length ? extractLayer(buildLanduseGeometry(tile.landuse)) : null,
-    rail: tile.rail.length ? extractLayer(buildRailGeometry(tile.rail)) : null,
-  };
+  try {
+    const layers = {
+      buildings: tile.buildings.length ? extractLayer(buildBuildingsGeometry(tile.buildings)) : null,
+      roads: tile.roads.length ? extractLayer(buildRoadsGeometry(tile.roads)) : null,
+      water: tile.water.length ? extractLayer(buildWaterGeometry(tile.water)) : null,
+      landuse: tile.landuse.length ? extractLayer(buildLanduseGeometry(tile.landuse)) : null,
+      rail: tile.rail.length ? extractLayer(buildRailGeometry(tile.rail)) : null,
+    };
 
-  const transfer = Object.values(layers).flatMap(transfersFor);
-  self.postMessage({ type: 'built', key, layers }, transfer);
+    const transfer = Object.values(layers).flatMap(transfersFor);
+    self.postMessage({ type: 'built', key, layers }, transfer);
+  } catch (err) {
+    self.postMessage({ type: 'build-error', key, message: err.message });
+  }
 };

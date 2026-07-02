@@ -2,6 +2,7 @@ import { scheduleState, Leisure, Commuting } from '../../scripts/lib/schedule.mj
 import { nearestPointOnPolylines } from '../../scripts/lib/spatial.mjs';
 import { stepAlongRoads } from './RoadFollower.js';
 import { unitHash } from '../../scripts/lib/hash.mjs';
+import { tileIndex, tileKey } from '../core/geo.js';
 
 // Orchestrates the citizen simulation with tile-driven agent LOD. The ~120k
 // population is dormant; only citizens homed in loaded tiles are candidates,
@@ -15,6 +16,11 @@ const RECONCILE_TICK = 10; // frames between acquire/release reconciliation
 const SNAP_MAX_M = 130;
 const WALK_SPEED_MPS = 1.35; // leisurely pedestrian pace
 const ARRIVE_DIST_M = 4; // within this of the destination, stand and idle
+// Force-release a body that's been continuously walking this long without
+// arriving (an unreachable/pathological destination). 420s (~567m at
+// WALK_SPEED_MPS) comfortably covers a real walk within the activation/
+// release radii (620m) while bounding worst-case pool-slot occupancy.
+const MAX_WALK_S = 420;
 
 export class PopulationManager {
   constructor({ store, pool, clock, tileManager, activationRadius, releaseRadius, capacity, tileSize = 500 }) {
@@ -36,6 +42,15 @@ export class PopulationManager {
   /** Wire to TileManager.onTileLoaded. Async-loads the shard, then activates. */
   onTileLoaded(key) {
     this.store.ensureTileLoaded(key).then(() => {
+      // The tile may have unloaded (and possibly reloaded under a different
+      // fetch) while the shard fetch was in flight. tileManager.loaded is the
+      // ground truth for what world geometry is actually present right now --
+      // recheck against it rather than trusting store.hasTile, which only
+      // means "the manifest lists a shard for this key", not "still wanted".
+      if (!this.tileManager.loaded.has(key)) {
+        this.store.unloadTile(key); // clean up the entry this late fetch just populated
+        return;
+      }
       if (this.store.hasTile(key)) this._activeTiles.add(key);
     });
   }
@@ -72,22 +87,33 @@ export class PopulationManager {
     const rRel2 = this.releaseRadius * this.releaseRadius;
     const tileReach = this.releaseRadius + this.tileSize;
 
-    // A. Release/refresh already-active bodies. Uses the body's record + real
-    // (walked) position, so it's independent of the tile pre-filter below.
+    // A. Evaluate every already-active body against its CURRENT schedule and
+    // LIVE (walked) position. A body is force-released only for reasons that
+    // are true regardless of how many citizens are competing for a slot: it
+    // wandered past the release radius, its safety valve tripped, or it has
+    // both gone indoors AND actually arrived (going indoors alone used to be
+    // enough, which vanished bodies mid-street). Everyone else survives into
+    // the nearest-N ranking in step C below.
+    const kept = [];
     for (const [id, body] of [...this.pool.active]) {
       const s = scheduleState(body.rec, t, day);
       const bx = body.object.position.x;
       const bz = body.object.position.z;
-      if (!this._isOutdoor(s) || (bx - px) ** 2 + (bz - pz) ** 2 > rRel2) {
+      const dsq = (bx - px) ** 2 + (bz - pz) ** 2;
+      const dest = this._snapToRoad(this._destAnchor(body.rec, s));
+      const arrived = (dest[0] - bx) ** 2 + (dest[1] - bz) ** 2 <= ARRIVE_DIST_M * ARRIVE_DIST_M;
+      const mustRelease = dsq > rRel2 || body.walkElapsedS > MAX_WALK_S || (!this._isOutdoor(s) && arrived);
+      if (mustRelease) {
         this.pool.release(id);
         continue;
       }
-      const dest = this._destAnchor(body.rec, s);
       body.destX = dest[0];
       body.destZ = dest[1];
+      kept.push({ id, rec: body.rec, s, dsq });
     }
 
-    // B. Consider citizens homed in nearby tiles for NEW bodies.
+    // B. Consider citizens homed in nearby tiles as candidates for a body,
+    // skipping anyone already active (already accounted for in `kept`).
     const counts = { AtHome: 0, AtWork: 0, Commuting: 0, Leisure: 0 };
     const candidates = [];
     for (const key of this._activeTiles) {
@@ -102,21 +128,43 @@ export class PopulationManager {
         if (!this._isOutdoor(s) || this.pool.isActive(rec.id)) continue;
         const start = this._startAnchor(rec, s);
         const dsq = (start[0] - px) ** 2 + (start[1] - pz) ** 2;
-        if (dsq <= rAct2) candidates.push({ rec, s, dsq });
+        if (dsq <= rAct2) candidates.push({ id: rec.id, rec, s, dsq });
       }
     }
     this._activityCounts = counts;
 
-    // C. Acquire nearest-first until the pool is full.
-    candidates.sort((a, b) => a.dsq - b.dsq);
+    // C. Rank everyone still-in-play (active + candidate) by distance to the
+    // player and keep only the nearest `capacity`. This restores the
+    // continuous nearest-N eviction the RoadFollower rewrite dropped,
+    // adapted for live per-body positions: active bodies rank by where
+    // they've actually walked to, candidates rank by their (not-yet-visited)
+    // start anchor. A candidate that ranks inside the top `capacity` evicts
+    // the farthest active body even if that body hasn't arrived yet --
+    // eviction-by-rank deliberately overrides step A's "wait for arrival":
+    // if `capacity` truly-closer citizens exist, showing them matters more
+    // than one cut-short arrival, and it's far rarer than the old
+    // near-universal mid-street vanishing.
+    const ranked = [...kept, ...candidates].sort((a, b) => a.dsq - b.dsq);
+    const keepIds = new Set();
+    for (const entry of ranked) {
+      if (keepIds.size >= this.capacity) break;
+      keepIds.add(entry.id);
+    }
+    for (const k of kept) {
+      if (!keepIds.has(k.id)) this.pool.release(k.id);
+    }
+
+    // D. Acquire/place the kept candidates (already-active bodies in `kept`
+    // were already placed in step A above).
     for (const c of candidates) {
-      if (!this.pool.hasFree) break;
-      const body = this.pool.acquire(c.rec.id);
+      if (!keepIds.has(c.id)) continue;
+      if (!this.pool.hasFree) break; // shouldn't happen given step C's accounting, but stay defensive
+      const body = this.pool.acquire(c.id);
       if (!body) break;
       body.rec = c.rec;
       const start = this._snapToRoad(this._startAnchor(c.rec, c.s));
-      body.setPositionYaw(start[0], 0, start[1], unitHash(c.rec.id, 'yaw') * Math.PI * 2);
-      const dest = this._destAnchor(c.rec, c.s);
+      body.setPositionYaw(start[0], 0, start[1], unitHash(c.id, 'yaw') * Math.PI * 2);
+      const dest = this._snapToRoad(this._destAnchor(c.rec, c.s));
       body.destX = dest[0];
       body.destZ = dest[1];
     }
@@ -125,6 +173,7 @@ export class PopulationManager {
   /** Per-frame: walk every active body toward its destination along the roads. */
   _advanceBodies(delta) {
     const step = WALK_SPEED_MPS * delta;
+    const roadsByTile = new Map(); // per-frame cache -- tile membership doesn't change mid-frame
     for (const body of this.pool.active.values()) {
       const bx = body.object.position.x;
       const bz = body.object.position.z;
@@ -133,7 +182,14 @@ export class PopulationManager {
         body.setState('idle'); // arrived — mill/stand
         continue;
       }
-      const roads = this.tileManager.getNearbyRoads(bx, bz);
+      body.walkElapsedS += delta;
+      const { tx, tz } = tileIndex(bx, bz, this.tileSize);
+      const key = tileKey(tx, tz);
+      let roads = roadsByTile.get(key);
+      if (!roads) {
+        roads = this.tileManager.getNearbyRoads(bx, bz);
+        roadsByTile.set(key, roads);
+      }
       const next = stepAlongRoads(bx, bz, roads, body.destX, body.destZ, step);
       body.setPositionYaw(next.x, 0, next.z, next.yaw);
       body.setState('walk');

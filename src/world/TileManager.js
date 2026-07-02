@@ -70,12 +70,6 @@ export class TileManager {
     this._centerTx = null;
     this._centerTz = null;
 
-    // Named roads (for HUD "nearest street" lookup) are cheap to keep
-    // around directly from the fetched tile JSON -- no need to round-trip
-    // them through the geometry-building worker.
-    this.namedRoads = new Map(); // key -> [{n, p}] for loaded tiles
-    this._fetchedNamedRoads = new Map(); // key -> [{n, p}] while a tile is in flight
-
     // Full road polylines per loaded tile (named + unnamed), used by citizen
     // movement to snap/walk on real streets. Kept lightweight (just the point
     // arrays), separate from the render geometry.
@@ -164,7 +158,6 @@ export class TileManager {
       const res = await fetch(`${this.tilesBaseUrl}/${key}.json`);
       if (!res.ok) throw new Error(`HTTP ${res.status} fetching tile ${key}`);
       const tile = await res.json();
-      this._fetchedNamedRoads.set(key, tile.roads.filter((r) => r.n));
       this._fetchedRoads.set(key, tile.roads);
       this._pickWorker().postMessage({ type: 'build', key, tile });
     } catch (err) {
@@ -174,15 +167,18 @@ export class TileManager {
   }
 
   _onWorkerMessage(data) {
+    if (data.type === 'build-error') {
+      console.error(`[TileManager] worker failed to build tile ${data.key}:`, data.message);
+      this.pending.delete(data.key);
+      return;
+    }
     if (data.type !== 'built') return;
     const { key, layers } = data;
     if (!this.pending.has(key)) return; // superseded (e.g. disposed already)
 
     this.readyQueue.push(() => {
       this.pending.delete(key);
-      const namedRoads = this._fetchedNamedRoads.get(key) ?? [];
       const allRoads = this._fetchedRoads.get(key) ?? [];
-      this._fetchedNamedRoads.delete(key);
       this._fetchedRoads.delete(key);
       if (this.loaded.has(key)) return;
 
@@ -195,7 +191,6 @@ export class TileManager {
         return;
       }
 
-      this.namedRoads.set(key, namedRoads);
       this.tileRoads.set(key, allRoads);
       this._integrateTile(key, layers);
     });
@@ -250,7 +245,6 @@ export class TileManager {
       mesh.geometry.dispose(); // never dispose the shared materials
     }
     this.loaded.delete(key);
-    this.namedRoads.delete(key);
     this.tileRoads.delete(key);
   }
 
@@ -260,8 +254,8 @@ export class TileManager {
     const nearbyRoadLists = [];
     for (let dx = -1; dx <= 1; dx++) {
       for (let dz = -1; dz <= 1; dz++) {
-        const roads = this.namedRoads.get(tileKey(tx + dx, tz + dz));
-        if (roads) nearbyRoadLists.push(roads);
+        const roads = this.tileRoads.get(tileKey(tx + dx, tz + dz));
+        if (roads) nearbyRoadLists.push(roads.filter((r) => r.n));
       }
     }
     return nearestRoadName(nearbyRoadLists, x, z, maxDist);

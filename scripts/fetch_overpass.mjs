@@ -17,6 +17,7 @@ import {
   LEVEL_HEIGHT_M,
   BUILDING_TYPE_HEIGHTS_M,
   SPAWN_LATLON,
+  CORE_HALF_EXTENT_M,
 } from '../src/config.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -142,9 +143,9 @@ function gridCells(bbox, cellSizeDeg) {
 }
 
 function coreCells() {
-  // ~1.2km half-extent around Lund Cathedral -> ~2.4km box.
-  const halfLat = 1200 / METERS_PER_DEG_LAT;
-  const halfLon = 1200 / metersPerDegLon(SPAWN_LATLON.lat);
+  // CORE_HALF_EXTENT_M around Lund Cathedral -> a box twice that across.
+  const halfLat = CORE_HALF_EXTENT_M / METERS_PER_DEG_LAT;
+  const halfLon = CORE_HALF_EXTENT_M / metersPerDegLon(SPAWN_LATLON.lat);
   return [
     {
       minLat: SPAWN_LATLON.lat - halfLat,

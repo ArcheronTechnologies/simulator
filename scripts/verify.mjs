@@ -117,6 +117,40 @@ async function main() {
     const jsErrors = await page.evaluate(() => window.__ERRORS__ || []);
     const allErrors = [...pageErrors, ...jsErrors];
 
+    // --- Resilience probe (F1 fix): a missing/failed character-and-citizen
+    // asset (the state of a fresh clone that hasn't run `npm run
+    // fetch:character`) must not break player movement, only degrade the
+    // citizen crowd. Blocking the shared model URL exercises both
+    // Character's own capsule fallback and PopulationManager's isolation
+    // the same way a real missing asset would -- both loaders fetch the
+    // exact same file.
+    console.log('[verify] probing startup resilience with the character/citizen model blocked...');
+    const resilienceContext = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+    const resiliencePage = await resilienceContext.newPage();
+    const resilienceErrors = [];
+    const EXPECTED_ERROR_SUBSTRINGS = [
+      '[Character] model load failed', // Character's own pre-existing, unrelated fallback log
+      'net::ERR_FAILED', // Chromium's own network-layer log for the request this probe deliberately aborts
+    ];
+    resiliencePage.on('pageerror', (err) => resilienceErrors.push(String(err)));
+    resiliencePage.on('console', (msg) => {
+      if (msg.type() !== 'error') return;
+      const text = msg.text();
+      if (EXPECTED_ERROR_SUBSTRINGS.some((s) => text.includes(s))) return;
+      resilienceErrors.push(text);
+    });
+    await resiliencePage.route('**/AnimationLibrary_Godot_Standard.gltf', (route) => route.abort());
+    await resiliencePage.goto(URL, { waitUntil: 'load' });
+    await resiliencePage.waitForFunction(() => window.__READY__ === true, { timeout: 30000 });
+    await resiliencePage.waitForFunction(() => window.__debugController != null, { timeout: 15000 });
+
+    const resilienceState = await resiliencePage.evaluate(() => ({
+      hasPopulation: window.__debugPopulation != null,
+      isFallbackCharacter: window.__debugCharacter?._isFallback === true,
+    }));
+    await resilienceContext.close();
+    console.log('[verify] resilience probe:', resilienceState, 'errors:', resilienceErrors);
+
     await page.screenshot({ path: 'scripts/.verify-screenshot.png' });
     const isNonBlack = await page.evaluate(() => {
       const canvas = document.querySelector('canvas');
@@ -137,6 +171,15 @@ async function main() {
     console.log(`[verify] citizens rendered near spawn (08:00): ${citizens.rendered}`, citizens.activity || '');
 
     const failures = [];
+    if (!resilienceState.isFallbackCharacter) {
+      failures.push('Resilience probe: Character did not fall back to the capsule when its model was blocked (probe not exercising the intended path).');
+    }
+    if (resilienceState.hasPopulation) {
+      failures.push('Resilience probe: population was still constructed despite the citizen model being blocked.');
+    }
+    if (resilienceErrors.length > 0) {
+      failures.push(`Resilience probe reported ${resilienceErrors.length} unexpected error(s): ${resilienceErrors.join(' | ')}`);
+    }
     if (citizens.rendered <= 0) {
       failures.push('No citizens rendered near spawn at the morning commute — population pipeline likely broken.');
     }
@@ -173,7 +216,7 @@ function run(cmd, args) {
   });
 }
 
-const OVERALL_TIMEOUT_MS = 120000;
+const OVERALL_TIMEOUT_MS = 150000; // +30s over the baseline for the F1 resilience probe's second page load
 const timeout = new Promise((_, reject) =>
   setTimeout(() => reject(new Error(`verify timed out after ${OVERALL_TIMEOUT_MS}ms`)), OVERALL_TIMEOUT_MS)
 );

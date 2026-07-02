@@ -18,28 +18,23 @@ import { classifyBuilding } from './lib/classify_buildings.mjs';
 import { homeCapacity, jobCapacity, ARCHETYPES } from './lib/archetypes.mjs';
 import { assignPopulation } from './lib/assign_population.mjs';
 import { serializeShard } from './lib/population_shard.mjs';
-import { projection, ORIGIN, TILE_SIZE_M, SPAWN_LATLON, LEVEL_HEIGHT_M, BUILDING_TYPE_HEIGHTS_M } from '../src/config.js';
+import { projection, ORIGIN, TILE_SIZE_M, LEVEL_HEIGHT_M, BUILDING_TYPE_HEIGHTS_M } from '../src/config.js';
+import { tileKey, tileKeyForPosition } from '../src/core/geo.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
 const CACHE_DIR = path.join(ROOT, 'data', 'cache', 'overpass');
 const OUT_DIR = path.join(ROOT, 'public', 'population');
+const WORLD_TILES_MANIFEST = path.join(ROOT, 'public', 'tiles', 'manifest.json');
 
 // Target roughly the real population of Lund municipality (~125k). Per-home
 // capacities are heuristics, so we scale them so the total lands near reality
 // rather than trusting the raw sum. Deterministic given the cache.
 const TARGET_POPULATION = 120000;
 
-// Core = tiles within this half-extent (m) of the spawn, matching the
-// committed core tileset so shipped population aligns with shipped geometry.
-const CORE_HALF_EXTENT_M = 1300;
 const RESIDENTIAL_LANDUSE = 5; // enum from osm_to_tiles.mjs
 const WORKPLACE_LANDUSE = 6;
 const PARK_LANDUSE_NAMES = new Set(['park', 'garden', 'nature_reserve', 'playground']);
-
-function tileKeyFor(x, z) {
-  return `${Math.floor(x / TILE_SIZE_M)}_${Math.floor(z / TILE_SIZE_M)}`;
-}
 
 function heightOf(tags) {
   if (tags.height) {
@@ -105,7 +100,7 @@ function buildLanduseIndex(landusePolys) {
     const minTz = Math.floor(minZ / TILE_SIZE_M), maxTz = Math.floor(maxZ / TILE_SIZE_M);
     for (let tx = minTx; tx <= maxTx; tx++) {
       for (let tz = minTz; tz <= maxTz; tz++) {
-        const key = `${tx}_${tz}`;
+        const key = tileKey(tx, tz);
         if (!grid.has(key)) grid.set(key, []);
         grid.get(key).push(poly);
       }
@@ -143,7 +138,7 @@ function classifyAll(elements) {
     for (const outer of outerRingsOf(el)) {
       if (outer.length < 3) continue;
       const centroid = centroidOfRing(outer);
-      const nearby = landuseIndex.get(tileKeyFor(centroid[0], centroid[1])) || [];
+      const nearby = landuseIndex.get(tileKeyForPosition(centroid[0], centroid[1], TILE_SIZE_M)) || [];
       const cls = classifyBuilding(tags, centroid, nearby);
       if (cls.kind === 'skip') { counts.skip++; continue; }
       const area = ringArea(outer);
@@ -162,12 +157,18 @@ function classifyAll(elements) {
   return { homes, workplaces, leisureSpots, landusePolys, counts };
 }
 
-function isCoreTile(tileKey) {
-  const spawn = projection.project(SPAWN_LATLON.lat, SPAWN_LATLON.lon);
-  const [tx, tz] = tileKey.split('_').map(Number);
-  const cx = (tx + 0.5) * TILE_SIZE_M;
-  const cz = (tz + 0.5) * TILE_SIZE_M;
-  return Math.abs(cx - spawn.x) <= CORE_HALF_EXTENT_M && Math.abs(cz - spawn.z) <= CORE_HALF_EXTENT_M;
+// "Core" means "actually in the committed world-geometry tileset" -- read
+// the real manifest rather than re-deriving an approximate distance-from-
+// spawn test. fetch_overpass.mjs's core fetch box is a lat/lon rectangle
+// (converted from CORE_HALF_EXTENT_M via degree-per-meter math), while a
+// geometric reconstruction here would use projected meters directly; the two
+// methods don't produce identical tile sets even at the same nominal extent
+// (confirmed: several real committed tiles' centers land 1200-1300m out,
+// just past a naive 1200m-in-meters cutoff). Checking real membership can't
+// drift from whatever fetch_overpass.mjs actually produced.
+async function loadCoreTileKeys() {
+  const manifest = JSON.parse(await readFile(WORLD_TILES_MANIFEST, 'utf8'));
+  return new Set(Object.keys(manifest.tiles));
 }
 
 async function main() {
@@ -202,10 +203,11 @@ async function main() {
   await rm(OUT_DIR, { recursive: true, force: true });
   await mkdir(OUT_DIR, { recursive: true });
 
+  const coreTileKeys = await loadCoreTileKeys();
   const manifestTiles = {};
   let written = 0;
   for (const [tile, list] of byHomeTile) {
-    const core = isCoreTile(tile);
+    const core = coreTileKeys.has(tile);
     if (mode === 'core' && !core) continue;
     await writeFile(path.join(OUT_DIR, `${tile}.json`), JSON.stringify(serializeShard(list)));
     manifestTiles[tile] = { n: list.length, core };

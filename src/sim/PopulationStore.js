@@ -1,4 +1,5 @@
 import { deserializeShard } from '../../scripts/lib/population_shard.mjs';
+import { tileKeyForPosition } from '../core/geo.js';
 
 // Loads and holds citizen records, sharded by home tile exactly like the world
 // tiles. Only tiles near the player are ever fetched/resident; shards are
@@ -42,7 +43,7 @@ export class PopulationStore {
       if (this.tiles.has(key)) return this.tiles.get(key); // raced
       const records = deserializeShard(shard);
       // Derive the (cheap, un-stored) work tile once for the byWorkTile logic.
-      for (const r of records) r.workTile = this._tileKeyFor(r.workXZ[0], r.workXZ[1]);
+      for (const r of records) r.workTile = tileKeyForPosition(r.workXZ[0], r.workXZ[1], this.tileSize);
       this.tiles.set(key, records);
       return records;
     } catch (err) {
@@ -64,9 +65,5 @@ export class PopulationStore {
 
   get loadedTileCount() {
     return this.tiles.size;
-  }
-
-  _tileKeyFor(x, z) {
-    return `${Math.floor(x / this.tileSize)}_${Math.floor(z / this.tileSize)}`;
   }
 }

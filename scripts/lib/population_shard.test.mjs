@@ -1,11 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  serializeShard,
-  deserializeShard,
-  serializeWorkIndex,
-  deserializeWorkIndex,
-} from './population_shard.mjs';
+import { serializeShard, deserializeShard } from './population_shard.mjs';
 
 const citizens = [
   { id: 5, arch: 0, homeXZ: [10.123, -20.456], homeTile: '0_-1', workXZ: [300.5, 400.25], workTile: '0_0', leisureXZ: [0, 0] },
@@ -38,15 +33,6 @@ test('shard is columnar (parallel arrays, count matches)', () => {
 
 test('empty shard round-trips', () => {
   assert.deepEqual(deserializeShard(serializeShard([])), []);
-});
-
-test('work index carries id, arch, and both anchors', () => {
-  const back = deserializeWorkIndex(serializeWorkIndex(citizens));
-  assert.equal(back.length, 2);
-  assert.equal(back[0].id, 5);
-  assert.ok(Math.abs(back[0].workXZ[0] - 300.5) < 0.51); // meter precision
-  assert.ok(Math.abs(back[0].homeXZ[0] - 10.123) < 0.51);
-  assert.equal(back[0].arch, 0);
 });
 
 test('serialized shard is JSON-stable (deterministic key order)', () => {

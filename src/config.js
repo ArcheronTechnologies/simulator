@@ -23,6 +23,11 @@ export const projection = makeProjection(ORIGIN.lat, ORIGIN.lon);
 // footprint -- the original estimate landed ~19m away, inside a wall).
 export const SPAWN_LATLON = { lat: 55.70481380770836, lon: 13.190765739866245 };
 
+// Half-extent (m) around SPAWN_LATLON that the committed core tileset
+// covers. Both fetch_overpass.mjs and generate_population.mjs must use this
+// same value so shipped population aligns with shipped geometry.
+export const CORE_HALF_EXTENT_M = 1200;
+
 // --- Tile streaming ---
 export const TILE_SIZE_M = 500;
 export const LOAD_RADIUS = 2; // tiles, Chebyshev — 5x5 active grid (~2.5km view)

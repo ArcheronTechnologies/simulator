@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { makeCitizenClone, CITIZEN_CLIPS } from './citizenModel.js';
 import { unitHash } from '../../scripts/lib/hash.mjs';
+import { crossfadeState } from '../core/animationCrossfade.js';
 
 const CROSSFADE_S = 0.2;
 
@@ -35,6 +36,10 @@ export class CitizenBody {
     this.rec = null; // the citizen record this body currently represents
     this.destX = 0;
     this.destZ = 0;
+    // Seconds spent actively walking (not idling) toward destX/destZ since
+    // the last assign(). PopulationManager's safety valve against a stuck/
+    // unreachable destination pinning a pool slot forever.
+    this.walkElapsedS = 0;
     this._tmpColor = new THREE.Color();
   }
 
@@ -42,6 +47,7 @@ export class CitizenBody {
   assign(citizenId) {
     this.citizenId = citizenId;
     this.inUse = true;
+    this.walkElapsedS = 0;
 
     // Deterministic muted clothing tint + slight height variation per citizen.
     const hue = unitHash(citizenId, 'hue');
@@ -82,17 +88,7 @@ export class CitizenBody {
   }
 
   setState(state) {
-    if (state === this.state) return;
-    const next = this.actions[state];
-    const prev = this.actions[this.state];
-    if (next) {
-      next.reset();
-      next.setEffectiveWeight(1);
-      next.fadeIn(CROSSFADE_S);
-      next.play();
-    }
-    if (prev) prev.fadeOut(CROSSFADE_S);
-    this.state = state;
+    this.state = crossfadeState(this.actions, this.state, state, CROSSFADE_S);
   }
 
   update(delta) {

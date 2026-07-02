@@ -20,6 +20,9 @@ export function loadCitizenModel() {
     _loading = new GLTFLoader().loadAsync(MODEL_URL).then((gltf) => {
       _gltf = gltf;
       return gltf;
+    }).catch((err) => {
+      _loading = null; // un-poison: a later call gets a fresh attempt instead of this dead rejection forever
+      throw err;
     });
   }
   return _loading;

@@ -28,12 +28,14 @@ export function buildBuildingsGeometry(buildings) {
     // --- walls: one quad per edge of every ring (outer + holes) ---
     for (const ring of rings) {
       const n = ring.length / 2;
+      if (n < 3) continue; // degenerate ring -- mirrors roads.js's point-count guard
       for (let i = 0; i < n; i++) {
         const j = (i + 1) % n;
         const x0 = ring[i * 2];
         const z0 = ring[i * 2 + 1];
         const x1 = ring[j * 2];
         const z1 = ring[j * 2 + 1];
+        if (Math.hypot(x1 - x0, z1 - z0) < 1e-6) continue; // degenerate zero-length edge -- mirrors appendRibbon's guard; safe to skip one edge of a closed ring
 
         const base0 = vertexOffset;
         positions.push(x0, base, z0);

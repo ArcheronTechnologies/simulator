@@ -151,30 +151,50 @@ const firstTilePromise = new Promise((resolve) => {
   };
 });
 
-Promise.all([tileManager.init(), character.load(), loadCitizenModel(), populationStore.init()])
-  .then(() => {
+// Citizens are an enhancement, not a requirement to play: public/assets/*.gltf
+// is git-ignored and only produced by a separate `npm run fetch:character`
+// step (not mentioned in the README's basic setup), so a fresh clone with no
+// character asset must still leave the player controllable -- exactly what
+// character.load()'s own capsule fallback already guarantees for the player.
+// Isolating the citizen group in its own catch means its rejection can never
+// reach coreReady's Promise.all below.
+const coreReady = Promise.all([tileManager.init(), character.load()]);
+const populationReady = Promise.all([loadCitizenModel(), populationStore.init()])
+  .then(() => true)
+  .catch((err) => {
+    // console.warn, not console.error: this is a handled, non-fatal path --
+    // verify.mjs treats console.error as a page-error signal, and a warning
+    // correctly signals "degraded but working" instead of "broken".
+    console.warn('[main] citizen population failed to load — continuing with no citizens:', err);
+    return false;
+  });
+
+Promise.all([coreReady, populationReady])
+  .then(([, hasPopulation]) => {
     engine.scene.add(character.object);
     controller = new Controller(character, collider);
     controller.setPosition(spawn.x, 0, spawn.z);
     window.__debugController = controller;
 
-    // The citizen model is loaded, so the pooled bodies can be built now.
-    const citizenPool = new CitizenBodyPool(engine.scene, MAX_RENDERED_CITIZENS);
-    population = new PopulationManager({
-      store: populationStore,
-      pool: citizenPool,
-      clock: gameClock,
-      tileManager,
-      activationRadius: CITIZEN_ACTIVATION_RADIUS_M,
-      releaseRadius: CITIZEN_RELEASE_RADIUS_M,
-      capacity: MAX_RENDERED_CITIZENS,
-      tileSize: TILE_SIZE_M,
-    });
-    window.__debugPopulation = population;
-    window.__debugCitizenPool = citizenPool;
+    if (hasPopulation) {
+      // The citizen model is loaded, so the pooled bodies can be built now.
+      const citizenPool = new CitizenBodyPool(engine.scene, MAX_RENDERED_CITIZENS);
+      population = new PopulationManager({
+        store: populationStore,
+        pool: citizenPool,
+        clock: gameClock,
+        tileManager,
+        activationRadius: CITIZEN_ACTIVATION_RADIUS_M,
+        releaseRadius: CITIZEN_RELEASE_RADIUS_M,
+        capacity: MAX_RENDERED_CITIZENS,
+        tileSize: TILE_SIZE_M,
+      });
+      window.__debugPopulation = population;
+      window.__debugCitizenPool = citizenPool;
 
-    // Any tiles that streamed in before the population existed need activating.
-    for (const key of tileManager.loaded.keys()) population.onTileLoaded(key);
+      // Any tiles that streamed in before the population existed need activating.
+      for (const key of tileManager.loaded.keys()) population.onTileLoaded(key);
+    }
 
     tileManager.update(spawn.x, spawn.z);
     return firstTilePromise;

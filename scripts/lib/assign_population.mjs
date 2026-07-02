@@ -7,6 +7,7 @@
 // core and full datasets.
 import { unitHash } from './hash.mjs';
 import { archetypeForRoll, ARCHETYPE_INDEX, WORKPLACE_ELIGIBILITY, ARCHETYPES } from './archetypes.mjs';
+import { tileKeyForPosition } from '../../src/core/geo.js';
 
 const DEFAULT_TILE_SIZE_M = 500;
 const CANDIDATE_SAMPLES = 8; // K-candidate nearest: cheap, deterministic, distance-biased
@@ -15,10 +16,6 @@ function dist2(ax, az, bx, bz) {
   const dx = ax - bx;
   const dz = az - bz;
   return dx * dx + dz * dz;
-}
-
-function tileKeyFor(x, z, tileSizeM) {
-  return `${Math.floor(x / tileSizeM)}_${Math.floor(z / tileSizeM)}`;
 }
 
 // Stable ordering so ids don't shift between runs: by tile, then position.
@@ -94,12 +91,12 @@ export function assignPopulation({ homes, workplaces, leisureSpots = [], tileSiz
       const work = pool && pool.length > 0 ? pickNearest(pool, home.x, home.z, id, 'work') : null;
       if (work) {
         workXZ = [work.x, work.z];
-        workTile = tileKeyFor(work.x, work.z, tileSizeM);
+        workTile = tileKeyForPosition(work.x, work.z, tileSizeM);
         stats.withWork++;
       } else {
         if (WORKPLACE_ELIGIBILITY[arch].length > 0) arch = 'home'; // wanted work, found none
         workXZ = [home.x, home.z];
-        workTile = tileKeyFor(home.x, home.z, tileSizeM);
+        workTile = tileKeyForPosition(home.x, home.z, tileSizeM);
       }
 
       const leisure = pickNearest(leisureSpots, home.x, home.z, id, 'leisure');
@@ -109,7 +106,7 @@ export function assignPopulation({ homes, workplaces, leisureSpots = [], tileSiz
         id,
         arch: ARCHETYPE_INDEX[arch],
         homeXZ: [home.x, home.z],
-        homeTile: tileKeyFor(home.x, home.z, tileSizeM),
+        homeTile: tileKeyForPosition(home.x, home.z, tileSizeM),
         workXZ,
         workTile,
         leisureXZ,

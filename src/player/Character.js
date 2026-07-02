@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { crossfadeState } from '../core/animationCrossfade.js';
 
 const MODEL_URL = './assets/AnimationLibrary_Godot_Standard.gltf';
 const CROSSFADE_S = 0.25;
@@ -71,21 +72,7 @@ export class Character {
 
   /** @param {'idle'|'walk'|'run'} state */
   setState(state) {
-    if (state === this.state) return;
-    const next = this.actions[state];
-    const prev = this.actions[this.state];
-    if (next) {
-      next.reset();
-      // fadeIn() only schedules a ramp that multiplies the action's
-      // existing base weight -- since inactive actions are constructed
-      // with base weight 0 (below), the ramp would compute 0 * anything
-      // and never actually reach 1 without this.
-      next.setEffectiveWeight(1);
-      next.fadeIn(CROSSFADE_S);
-      next.play();
-    }
-    if (prev) prev.fadeOut(CROSSFADE_S);
-    this.state = state;
+    this.state = crossfadeState(this.actions, this.state, state, CROSSFADE_S);
   }
 
   update(delta) {

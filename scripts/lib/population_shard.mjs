@@ -52,32 +52,3 @@ export function deserializeShard(shard) {
   }
   return out;
 }
-
-/**
- * Compact "work index" entry: the minimal data needed to render a commuter
- * ARRIVING at a workplace tile whose home is elsewhere (id + appearance +
- * both anchors). Written to population/work/{tile}.json.
- */
-export function serializeWorkIndex(citizens) {
-  const idx = { count: citizens.length, id: [], arch: [], homeXZ: [], workXZ: [] };
-  for (const c of citizens) {
-    idx.id.push(c.id);
-    idx.arch.push(c.arch);
-    idx.homeXZ.push(roundCoord(c.homeXZ[0]), roundCoord(c.homeXZ[1]));
-    idx.workXZ.push(roundCoord(c.workXZ[0]), roundCoord(c.workXZ[1]));
-  }
-  return idx;
-}
-
-export function deserializeWorkIndex(idx) {
-  const out = new Array(idx.count);
-  for (let i = 0; i < idx.count; i++) {
-    out[i] = {
-      id: idx.id[i],
-      arch: idx.arch[i],
-      homeXZ: [idx.homeXZ[i * 2], idx.homeXZ[i * 2 + 1]],
-      workXZ: [idx.workXZ[i * 2], idx.workXZ[i * 2 + 1]],
-    };
-  }
-  return out;
-}
