@@ -2,7 +2,7 @@ import { scheduleState, Leisure, Commuting } from '../../scripts/lib/schedule.mj
 import { nearestPointOnPolylines } from '../../scripts/lib/spatial.mjs';
 import { stepAlongRoads } from './RoadFollower.js';
 import { unitHash } from '../../scripts/lib/hash.mjs';
-import { tileIndex, tileKey } from '../core/geo.js';
+import { tileKeyForPosition } from '../core/geo.js';
 
 // Orchestrates the citizen simulation with tile-driven agent LOD. The ~120k
 // population is dormant; only citizens homed in loaded tiles are candidates,
@@ -16,11 +16,22 @@ const RECONCILE_TICK = 10; // frames between acquire/release reconciliation
 const SNAP_MAX_M = 130;
 const WALK_SPEED_MPS = 1.35; // leisurely pedestrian pace
 const ARRIVE_DIST_M = 4; // within this of the destination, stand and idle
-// Force-release a body that's been continuously walking this long without
-// arriving (an unreachable/pathological destination). 420s (~567m at
-// WALK_SPEED_MPS) comfortably covers a real walk within the activation/
-// release radii (620m) while bounding worst-case pool-slot occupancy.
-const MAX_WALK_S = 420;
+// Stall valve: force-release a body that has made no net progress toward its
+// destination for this long -- an unreachable or oscillating target pinning a
+// pool slot. Progress-based rather than total-walk-time, so a long but
+// legitimate walk (a near-diametral commute through the release disc, chained
+// outdoor schedule legs, or the player following one citizen for blocks)
+// never trips it: the timer resets whenever the body gets measurably closer
+// to its current destination than it has ever been (see _advanceBodies).
+const MAX_STALL_S = 120;
+const PROGRESS_EPS_M = 0.5; // "measurably closer" threshold for the stall valve
+// Hysteresis for nearest-N eviction: an active body's rank distance is
+// discounted by this factor, so a candidate must be meaningfully closer
+// (~16% in linear distance) to evict a walking body. Without it, at pool
+// saturation an outbound walker near the capacity cut-line gets evicted,
+// re-qualifies at its start anchor next tick, and visibly teleports back --
+// looping until its schedule window closes.
+const ACTIVE_RANK_BIAS = 0.7;
 
 export class PopulationManager {
   constructor({ store, pool, clock, tileManager, activationRadius, releaseRadius, capacity, tileSize = 500 }) {
@@ -41,7 +52,7 @@ export class PopulationManager {
 
   /** Wire to TileManager.onTileLoaded. Async-loads the shard, then activates. */
   onTileLoaded(key) {
-    this.store.ensureTileLoaded(key).then(() => {
+    this.store.ensureTileLoaded(key).then((records) => {
       // The tile may have unloaded (and possibly reloaded under a different
       // fetch) while the shard fetch was in flight. tileManager.loaded is the
       // ground truth for what world geometry is actually present right now --
@@ -51,7 +62,10 @@ export class PopulationManager {
         this.store.unloadTile(key); // clean up the entry this late fetch just populated
         return;
       }
-      if (this.store.hasTile(key)) this._activeTiles.add(key);
+      // records is null when the shard fetch failed (don't mark the tile
+      // active with permanently-empty data) or when another call owns the
+      // in-flight fetch (that call activates on ITS resolution instead).
+      if (records && this.store.hasTile(key)) this._activeTiles.add(key);
     });
   }
 
@@ -86,30 +100,45 @@ export class PopulationManager {
     const rAct2 = this.activationRadius * this.activationRadius;
     const rRel2 = this.releaseRadius * this.releaseRadius;
     const tileReach = this.releaseRadius + this.tileSize;
+    // Anchor snaps cluster in a handful of tiles, so share one road lookup
+    // per tile across the whole pass (same pattern as _advanceBodies).
+    const roadsByTile = new Map();
 
     // A. Evaluate every already-active body against its CURRENT schedule and
     // LIVE (walked) position. A body is force-released only for reasons that
     // are true regardless of how many citizens are competing for a slot: it
-    // wandered past the release radius, its safety valve tripped, or it has
+    // wandered past the release radius, its stall valve tripped, or it has
     // both gone indoors AND actually arrived (going indoors alone used to be
     // enough, which vanished bodies mid-street). Everyone else survives into
     // the nearest-N ranking in step C below.
     const kept = [];
     for (const [id, body] of [...this.pool.active]) {
-      const s = scheduleState(body.rec, t, day);
       const bx = body.object.position.x;
       const bz = body.object.position.z;
       const dsq = (bx - px) ** 2 + (bz - pz) ** 2;
-      const dest = this._snapToRoad(this._destAnchor(body.rec, s));
-      const arrived = (dest[0] - bx) ** 2 + (dest[1] - bz) ** 2 <= ARRIVE_DIST_M * ARRIVE_DIST_M;
-      const mustRelease = dsq > rRel2 || body.walkElapsedS > MAX_WALK_S || (!this._isOutdoor(s) && arrived);
-      if (mustRelease) {
+      // Cheap, destination-independent releases first -- no point computing
+      // a schedule + road snap for a body that's leaving regardless.
+      if (dsq > rRel2 || body.stallElapsedS > MAX_STALL_S) {
         this.pool.release(id);
         continue;
       }
-      body.destX = dest[0];
-      body.destZ = dest[1];
-      kept.push({ id, rec: body.rec, s, dsq });
+      const s = scheduleState(body.rec, t, day);
+      const dest = this._snapToRoad(this._destAnchor(body.rec, s), roadsByTile);
+      const arrived = (dest[0] - bx) ** 2 + (dest[1] - bz) ** 2 <= ARRIVE_DIST_M * ARRIVE_DIST_M;
+      if (!this._isOutdoor(s) && arrived) {
+        this.pool.release(id);
+        continue;
+      }
+      if (dest[0] !== body.destX || dest[1] !== body.destZ) {
+        // New leg: the schedule moved on to a different anchor (or a tile
+        // event re-snapped the target). The stall valve measures progress
+        // toward ONE destination, so it starts over with the new one.
+        body.bestDestDistM = Infinity;
+        body.stallElapsedS = 0;
+        body.destX = dest[0];
+        body.destZ = dest[1];
+      }
+      kept.push({ id, rec: body.rec, s, dsq: dsq * ACTIVE_RANK_BIAS });
     }
 
     // B. Consider citizens homed in nearby tiles as candidates for a body,
@@ -137,9 +166,10 @@ export class PopulationManager {
     // player and keep only the nearest `capacity`. This restores the
     // continuous nearest-N eviction the RoadFollower rewrite dropped,
     // adapted for live per-body positions: active bodies rank by where
-    // they've actually walked to, candidates rank by their (not-yet-visited)
-    // start anchor. A candidate that ranks inside the top `capacity` evicts
-    // the farthest active body even if that body hasn't arrived yet --
+    // they've actually walked to (discounted by ACTIVE_RANK_BIAS so eviction
+    // has hysteresis), candidates rank by their (not-yet-visited) start
+    // anchor. A candidate that ranks inside the top `capacity` evicts the
+    // farthest active body even if that body hasn't arrived yet --
     // eviction-by-rank deliberately overrides step A's "wait for arrival":
     // if `capacity` truly-closer citizens exist, showing them matters more
     // than one cut-short arrival, and it's far rarer than the old
@@ -162,9 +192,9 @@ export class PopulationManager {
       const body = this.pool.acquire(c.id);
       if (!body) break;
       body.rec = c.rec;
-      const start = this._snapToRoad(this._startAnchor(c.rec, c.s));
+      const start = this._snapToRoad(this._startAnchor(c.rec, c.s), roadsByTile);
       body.setPositionYaw(start[0], 0, start[1], unitHash(c.id, 'yaw') * Math.PI * 2);
-      const dest = this._snapToRoad(this._destAnchor(c.rec, c.s));
+      const dest = this._snapToRoad(this._destAnchor(c.rec, c.s), roadsByTile);
       body.destX = dest[0];
       body.destZ = dest[1];
     }
@@ -182,9 +212,18 @@ export class PopulationManager {
         body.setState('idle'); // arrived — mill/stand
         continue;
       }
-      body.walkElapsedS += delta;
-      const { tx, tz } = tileIndex(bx, bz, this.tileSize);
-      const key = tileKey(tx, tz);
+      // Stall-valve bookkeeping: any new best approach to the destination
+      // proves the body isn't stuck and restarts the clock. The epsilon
+      // means a directly-approaching body resets every ~EPS/speed seconds,
+      // while a body oscillating at a greedy-road-following dead end (or
+      // whose destination is unreachable) accumulates continuously.
+      if (dd < body.bestDestDistM - PROGRESS_EPS_M) {
+        body.bestDestDistM = dd;
+        body.stallElapsedS = 0;
+      } else {
+        body.stallElapsedS += delta;
+      }
+      const key = tileKeyForPosition(bx, bz, this.tileSize);
       let roads = roadsByTile.get(key);
       if (!roads) {
         roads = this.tileManager.getNearbyRoads(bx, bz);
@@ -214,8 +253,23 @@ export class PopulationManager {
     return rec.homeXZ;
   }
 
-  _snapToRoad([ax, az]) {
-    const roads = this.tileManager.getNearbyRoads(ax, az);
+  /**
+   * Nearest on-road point for an anchor, or the raw anchor if no road is
+   * within SNAP_MAX_M. Pass a Map to share getNearbyRoads results across
+   * many snaps in one pass (keyed by the anchor's tile).
+   */
+  _snapToRoad([ax, az], roadsByTile = null) {
+    let roads;
+    if (roadsByTile) {
+      const key = tileKeyForPosition(ax, az, this.tileSize);
+      roads = roadsByTile.get(key);
+      if (!roads) {
+        roads = this.tileManager.getNearbyRoads(ax, az);
+        roadsByTile.set(key, roads);
+      }
+    } else {
+      roads = this.tileManager.getNearbyRoads(ax, az);
+    }
     if (roads.length) {
       const snap = nearestPointOnPolylines(roads, ax, az);
       if (snap && snap.dist <= SNAP_MAX_M) return [snap.x, snap.z];

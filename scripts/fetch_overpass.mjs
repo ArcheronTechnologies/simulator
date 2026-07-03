@@ -201,7 +201,7 @@ async function main() {
   for (const [key, tile] of tilesMap) {
     await writeFile(path.join(TILES_OUT_DIR, `${key}.json`), JSON.stringify(tile));
   }
-  const manifest = buildManifest(tilesMap, { origin: ORIGIN, tileSizeM: TILE_SIZE_M });
+  const manifest = buildManifest(tilesMap, { origin: ORIGIN, tileSizeM: TILE_SIZE_M, mode });
   await writeFile(path.join(TILES_OUT_DIR, 'manifest.json'), JSON.stringify(manifest, null, 2));
 
   console.log(`[fetch_overpass] wrote ${tilesMap.size} tile files + manifest.json to ${TILES_OUT_DIR}`);

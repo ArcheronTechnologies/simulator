@@ -170,6 +170,7 @@ export class TileManager {
     if (data.type === 'build-error') {
       console.error(`[TileManager] worker failed to build tile ${data.key}:`, data.message);
       this.pending.delete(data.key);
+      this._fetchedRoads.delete(data.key); // _requestTile's entry -- the 'built' path clears this, this path must too
       return;
     }
     if (data.type !== 'built') return;

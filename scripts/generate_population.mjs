@@ -166,8 +166,24 @@ function classifyAll(elements) {
 // (confirmed: several real committed tiles' centers land 1200-1300m out,
 // just past a naive 1200m-in-meters cutoff). Checking real membership can't
 // drift from whatever fetch_overpass.mjs actually produced.
-async function loadCoreTileKeys() {
+//
+// That guarantee only holds when the manifest itself IS the core fetch,
+// though: if `npm run data:all` ran more recently than `npm run data:core`,
+// public/tiles/manifest.json lists the whole municipality, and every home
+// tile would silently read back as "core" -- ballooning a `--core` population
+// run to thousands of shards instead of the intended ~58. Refuse rather than
+// silently do that; a manifest with no generatedMode at all is a legacy/
+// pre-existing --core manifest (the field didn't always exist) and is fine.
+async function loadCoreTileKeys(mode) {
   const manifest = JSON.parse(await readFile(WORLD_TILES_MANIFEST, 'utf8'));
+  if (mode === 'core' && manifest.generatedMode === 'all') {
+    throw new Error(
+      'public/tiles/manifest.json was generated with --all, so tile membership no longer ' +
+      'identifies the core subset. Run "npm run data:core" to regenerate it before ' +
+      '"npm run data:population" (--core), or use "node scripts/generate_population.mjs --all" ' +
+      'if you want population for the whole currently-loaded dataset.'
+    );
+  }
   return new Set(Object.keys(manifest.tiles));
 }
 
@@ -203,7 +219,7 @@ async function main() {
   await rm(OUT_DIR, { recursive: true, force: true });
   await mkdir(OUT_DIR, { recursive: true });
 
-  const coreTileKeys = await loadCoreTileKeys();
+  const coreTileKeys = await loadCoreTileKeys(mode);
   const manifestTiles = {};
   let written = 0;
   for (const [tile, list] of byHomeTile) {

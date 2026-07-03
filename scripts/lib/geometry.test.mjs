@@ -56,6 +56,29 @@ test('assembleRings resolves the same junction with the shortcut last in the arr
   assertIsTheSquare(assembleRings([wayPQ, wayRest, shortcut]));
 });
 
+// Same P-Q-R-S-P square + P-Q shortcut, but the rest of the boundary is now
+// THREE separate single-edge ways (Q-R, R-S, S-P) instead of one multi-point
+// way. This creates more fan-out across successive rounds of the inner
+// matching loop: a degenerate candidate skipped in round 1 (per the
+// too-small-ring preference above) stays unused and can resurface in round 2
+// once the chain's start/end have moved, matching via a *different* case and
+// splicing a duplicate vertex into the chain's interior -- silently
+// corrupting it into a path that never closes. Confirmed by exhaustive
+// testing: with only the too-small-ring preference, 4 of 5 basic orderings
+// (and most of all 120 full permutations) return 0 rings instead of the
+// square; the foldsBack check fixes all 120.
+const wayQR = [Q, R];
+const wayRS = [R, S];
+const waySP = [S, P];
+
+test('assembleRings resolves a multi-round fold-back at the same junction (boundary split into 3 separate edges)', () => {
+  assertIsTheSquare(assembleRings([wayPQ, shortcut, wayQR, wayRS, waySP]));
+  assertIsTheSquare(assembleRings([shortcut, wayPQ, wayQR, wayRS, waySP]));
+  assertIsTheSquare(assembleRings([wayPQ, wayQR, shortcut, wayRS, waySP]));
+  assertIsTheSquare(assembleRings([wayPQ, wayQR, wayRS, shortcut, waySP]));
+  assertIsTheSquare(assembleRings([wayPQ, wayQR, wayRS, waySP, shortcut]));
+});
+
 test('buildMultipolygons assigns an inner ring to its containing outer ring', () => {
   const outer = [[0, 0], [0, 10], [10, 10], [10, 0], [0, 0]];
   const inner = [[3, 3], [3, 6], [6, 6], [6, 3], [3, 3]];

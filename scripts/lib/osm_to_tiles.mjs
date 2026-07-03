@@ -318,7 +318,7 @@ export function tileFeatures(features, tileSizeM) {
 }
 
 /** Builds the manifest summarizing which tiles have data (non-empty only). */
-export function buildManifest(tilesMap, { origin, tileSizeM }) {
+export function buildManifest(tilesMap, { origin, tileSizeM, mode }) {
   const tiles = {};
   let minTx = Infinity, maxTx = -Infinity, minTz = Infinity, maxTz = -Infinity;
 
@@ -342,6 +342,12 @@ export function buildManifest(tilesMap, { origin, tileSizeM }) {
     tileSize: tileSizeM,
     bounds: tilesMap.size > 0 ? { minTx, maxTx, minTz, maxTz } : null,
     tileCount: tilesMap.size,
+    // Which fetch produced this manifest ('core' | 'all'), so downstream
+    // consumers (generate_population.mjs) can tell whether tile membership
+    // alone means "core" or covers the whole municipality. Absent on
+    // manifests written before this field existed -- treat that as unknown,
+    // not as either mode.
+    generatedMode: mode,
     tiles,
   };
 }

@@ -11,6 +11,7 @@
     "maxTz": -7
   },
   "tileCount": 63,
+  "generatedMode": "core",
   "tiles": {
     "-21_-9": {
       "b": 220,

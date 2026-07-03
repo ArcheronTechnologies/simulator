@@ -36,10 +36,13 @@ export class CitizenBody {
     this.rec = null; // the citizen record this body currently represents
     this.destX = 0;
     this.destZ = 0;
-    // Seconds spent actively walking (not idling) toward destX/destZ since
-    // the last assign(). PopulationManager's safety valve against a stuck/
-    // unreachable destination pinning a pool slot forever.
-    this.walkElapsedS = 0;
+    // Stall-valve state, driven by PopulationManager: the closest this body
+    // has ever been to (destX, destZ) on its current leg, and seconds since
+    // it last beat that. A stuck/unreachable destination stops improving
+    // bestDestDistM, the timer accumulates, and the manager reclaims the
+    // slot (see MAX_STALL_S there).
+    this.stallElapsedS = 0;
+    this.bestDestDistM = Infinity;
     this._tmpColor = new THREE.Color();
   }
 
@@ -47,7 +50,8 @@ export class CitizenBody {
   assign(citizenId) {
     this.citizenId = citizenId;
     this.inUse = true;
-    this.walkElapsedS = 0;
+    this.stallElapsedS = 0;
+    this.bestDestDistM = Infinity;
 
     // Deterministic muted clothing tint + slight height variation per citizen.
     const hue = unitHash(citizenId, 'hue');

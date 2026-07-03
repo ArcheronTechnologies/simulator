@@ -14,6 +14,29 @@ function reversed(arr) {
   return arr.slice().reverse();
 }
 
+/**
+ * True if extending the chain to `next` revisits a point it's already
+ * passed through, other than the legitimate final start=end closure. A
+ * degenerate segment skipped in one round (see MIN_RING_POINTS below) stays
+ * unused and can resurface in a LATER round, matching against the chain's
+ * new start/end via a different case and splicing a duplicate vertex into
+ * the middle of the path -- confirmed by exhaustive testing (all 120
+ * orderings of a 5-way adversarial junction) that this silently corrupts
+ * the chain into one that never closes, dropping a real ring. A valid OSM
+ * ring never revisits an interior node before its final closing repeat, so
+ * this is a general (not just narrowly-adversarial) self-intersection check.
+ */
+function foldsBack(chain) {
+  const seen = new Set();
+  for (let i = 0; i < chain.length; i++) {
+    const k = keyOf(chain[i]);
+    const isLegitClose = i === chain.length - 1 && k === keyOf(chain[0]);
+    if (seen.has(k) && !isLegitClose) return true;
+    seen.add(k);
+  }
+  return false;
+}
+
 const MIN_RING_POINTS = 4; // a valid ring needs >=3 distinct vertices + the closing repeat
 
 /**
@@ -38,13 +61,14 @@ export function assembleRings(ways) {
 
       // At a 3+-way junction more than one unused segment can extend the
       // chain. Blindly taking the first array-order match can pick a
-      // candidate that immediately closes the chain into a
+      // candidate that either (a) immediately closes the chain into a
       // structurally-impossible too-small ring (fewer than MIN_RING_POINTS --
-      // it would be dropped by the length check below anyway) while
-      // consuming a segment a real, larger ring actually needed. Skip only
-      // that specific degenerate case in favor of the next candidate;
-      // otherwise keep the original first-match array order. Still
-      // O(segments) per step -- no backtracking.
+      // it would be dropped by the length check below anyway), or (b) folds
+      // the chain back onto a point already visited (see foldsBack above) --
+      // in both cases consuming a segment a real, larger ring actually
+      // needed. Skip only those specific bad-match cases in favor of the
+      // next candidate; otherwise keep the original first-match array order.
+      // Still O(segments) per step -- no backtracking.
       let bestJ = -1;
       let bestChain = null;
       let bestDegenerate = false;
@@ -65,7 +89,8 @@ export function assembleRings(ways) {
           continue;
         }
 
-        const degenerate = keyOf(next[0]) === keyOf(next[next.length - 1]) && next.length < MIN_RING_POINTS;
+        const closesTooSmall = keyOf(next[0]) === keyOf(next[next.length - 1]) && next.length < MIN_RING_POINTS;
+        const degenerate = closesTooSmall || foldsBack(next);
         if (bestJ === -1) {
           bestJ = j;
           bestChain = next;
