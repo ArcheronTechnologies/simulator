@@ -1,0 +1,58 @@
+import * as THREE from 'three';
+import { appendPolygonCap } from './polygonFill.js';
+
+/**
+ * Builds one merged BufferGeometry for every building in a tile: a top cap
+ * (earcut-triangulated, holes supported) at y=height, and wall quads per
+ * ring edge (outer + holes) from y=base to y=height. No bottom cap — never
+ * visible from inside a walkable city.
+ *
+ * @param {Array<{r: number[][], h: number, b: number}>} buildings - tile.buildings
+ * @returns {THREE.BufferGeometry}
+ */
+export function buildBuildingsGeometry(buildings) {
+  const positions = [];
+  const indices = [];
+  let vertexOffset = 0;
+
+  for (const building of buildings) {
+    const rings = building.r; // [outerFlat, ...holeFlats], each [x,z,x,z,...]
+    const height = building.h;
+    const base = building.b || 0;
+    if (height <= base) continue;
+
+    const nextOffset = appendPolygonCap(rings, height, positions, indices, vertexOffset);
+    if (nextOffset === vertexOffset) continue; // malformed ring, cap build skipped it
+    vertexOffset = nextOffset;
+
+    // --- walls: one quad per edge of every ring (outer + holes) ---
+    for (const ring of rings) {
+      const n = ring.length / 2;
+      if (n < 3) continue; // degenerate ring -- mirrors roads.js's point-count guard
+      for (let i = 0; i < n; i++) {
+        const j = (i + 1) % n;
+        const x0 = ring[i * 2];
+        const z0 = ring[i * 2 + 1];
+        const x1 = ring[j * 2];
+        const z1 = ring[j * 2 + 1];
+        if (Math.hypot(x1 - x0, z1 - z0) < 1e-6) continue; // degenerate zero-length edge -- mirrors appendRibbon's guard; safe to skip one edge of a closed ring
+
+        const base0 = vertexOffset;
+        positions.push(x0, base, z0);
+        positions.push(x1, base, z1);
+        positions.push(x1, height, z1);
+        positions.push(x0, height, z0);
+        indices.push(base0, base0 + 1, base0 + 2, base0, base0 + 2, base0 + 3);
+        vertexOffset += 4;
+      }
+    }
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  geometry.computeBoundingBox();
+  geometry.computeBoundingSphere();
+  return geometry;
+}
